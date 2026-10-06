@@ -1,0 +1,3 @@
+boto3>=1.34
+prometheus-client>=0.20
+requests>=2.31

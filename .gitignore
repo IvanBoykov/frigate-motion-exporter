@@ -1,0 +1,7 @@
+.secrets
+*.env
+.env
+__pycache__/
+*.py[cod]
+*.mp4
+intervals*.json
