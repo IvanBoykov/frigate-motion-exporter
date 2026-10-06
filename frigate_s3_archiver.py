@@ -79,6 +79,12 @@ DEFAULT_IDLE_SLEEP_SECONDS = 60
 DEFAULT_CAMERA_RESTART_BACKOFF_SECONDS = 5.0
 DEFAULT_CAMERA_RESTART_BACKOFF_MAX_SECONDS = 300.0
 
+# Startup camera discovery retries: enough to outlast a normal container
+# start of Frigate or its reverse proxy, short enough that a wrong address
+# still fails fast.
+DEFAULT_CAMERA_DISCOVERY_ATTEMPTS = 12
+DEFAULT_CAMERA_DISCOVERY_RETRY_SECONDS = 5.0
+
 # Largest exponent whose power of two is still representable as a float;
 # beyond it, multiplying by 2**n overflows instead of saturating.
 _MAX_BACKOFF_DOUBLINGS = 1023
@@ -240,6 +246,46 @@ async def fetch_cameras(frigate_client, timeout=DEFAULT_RECORDINGS_TIMEOUT):
         raise RuntimeError("Frigate returned no camera list")
 
     return sorted(config["cameras"])
+
+
+async def fetch_cameras_with_retry(
+    frigate_client,
+    attempts=DEFAULT_CAMERA_DISCOVERY_ATTEMPTS,
+    retry_seconds=DEFAULT_CAMERA_DISCOVERY_RETRY_SECONDS,
+    timeout=DEFAULT_RECORDINGS_TIMEOUT,
+    sleep=asyncio.sleep,
+):
+    """Return the camera list, retrying while Frigate finishes starting.
+
+    Discovery is the only Frigate call made before any supervisor exists, so a
+    Frigate that is still booting would kill the process here, while the same
+    failure one minute later is retried forever by the camera supervisors. The
+    budget (12 tries, 5 s apart) covers a normal container or proxy restart;
+    after it the last error is raised and startup fails, because an endpoint
+    unreachable for a full minute is more likely a configuration problem than
+    a transient one.
+
+    ``sleep`` is injectable so tests do not wait out the retry budget.
+    """
+    if attempts < 1:
+        raise ValueError("attempts must be >= 1")
+    if retry_seconds < 0:
+        raise ValueError("retry_seconds must be >= 0")
+
+    last_exc = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return await fetch_cameras(frigate_client, timeout=timeout)
+        except Exception as exc:
+            last_exc = exc
+            print(
+                f"Camera discovery failed "
+                f"({attempt}/{attempts}): {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            if attempt < attempts:
+                await sleep(retry_seconds)
+    raise last_exc
 
 
 def select_cameras(cameras, include=None, exclude=None):
@@ -1626,7 +1672,7 @@ async def async_main(config, now_fn=time.time):
         f"region={s3_client.meta.region_name}"
     )
 
-    cameras = await fetch_cameras(frigate_client)
+    cameras = await fetch_cameras_with_retry(frigate_client)
     discovered = list(cameras)
     cameras = select_cameras(
         cameras, include=cfg.cameras_include, exclude=cfg.cameras_exclude

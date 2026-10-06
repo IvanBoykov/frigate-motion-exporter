@@ -44,6 +44,11 @@ class FakeFrigateHandler(BaseHTTPRequestHandler):
 
     segments_by_camera = {}
     clip_failures = set()
+    # First N requests to /api/config answer 503, standing in for a Frigate
+    # (or its proxy) that is still starting while the archiver boots. 0 = never,
+    # None = always.
+    config_failures = 0
+    config_requests = []
     requested_clips = []
     clip_attempts = []
     clip_raw_starts = []
@@ -88,6 +93,13 @@ class FakeFrigateHandler(BaseHTTPRequestHandler):
         parts = path.split("/")
 
         if path.startswith("/api/config"):
+            type(self).config_requests.append(path)
+            remaining = type(self).config_failures
+            if remaining is None or remaining != 0:
+                if remaining is not None:
+                    type(self).config_failures = remaining - 1
+                self._send(503, b"starting")
+                return
             cameras = {name: {} for name in self.segments_by_camera}
             self._send(200, json.dumps({"cameras": cameras}).encode())
             return
@@ -344,6 +356,8 @@ def frigate_server():
         "cam_b": make_segments(CAM_B_MOTION),
     }
     FakeFrigateHandler.clip_failures = set()
+    FakeFrigateHandler.config_failures = 0
+    FakeFrigateHandler.config_requests = []
     FakeFrigateHandler.requested_clips = []
     FakeFrigateHandler.clip_attempts = []
     FakeFrigateHandler.clip_raw_starts = []
@@ -407,6 +421,73 @@ def test_client_with_credentials_reads_the_same_api(frigate_server):
 def test_rejects_non_http_base_url():
     with pytest.raises(ValueError):
         m.make_frigate_client("not-a-url")
+
+
+class RecordingSleep:
+    """An asyncio.sleep stand-in that records its delays and never waits."""
+
+    def __init__(self):
+        self.delays = []
+
+    async def __call__(self, seconds):
+        self.delays.append(seconds)
+
+
+def test_camera_discovery_survives_a_brief_frigate_outage(frigate_server):
+    """A Frigate still booting at startup is retried, not fatal.
+
+    The first two /api/config answers are 503; discovery must keep retrying
+    and return the camera list once Frigate answers.
+    """
+    FakeFrigateHandler.config_failures = 2
+    slept = RecordingSleep()
+
+    cameras = run(
+        m.fetch_cameras_with_retry(
+            make_client(frigate_server), sleep=slept
+        )
+    )
+
+    assert cameras == ["cam_a", "cam_b"]
+    # Two failures, two waits, no wait after the success.
+    assert slept.delays == [
+        m.DEFAULT_CAMERA_DISCOVERY_RETRY_SECONDS,
+        m.DEFAULT_CAMERA_DISCOVERY_RETRY_SECONDS,
+    ]
+
+
+def test_camera_discovery_gives_up_after_its_budget(frigate_server):
+    """After the budget the last error is raised: startup fails, no hang."""
+
+    FakeFrigateHandler.config_failures = None
+    slept = RecordingSleep()
+    attempts = 3
+
+    with pytest.raises(requests.exceptions.HTTPError) as excinfo:
+        run(
+            m.fetch_cameras_with_retry(
+                make_client(frigate_server),
+                attempts=attempts,
+                sleep=slept,
+            )
+        )
+
+    assert excinfo.value.response.status_code == 503
+    # Every failed attempt slept once, the last one raised instead.
+    assert len(slept.delays) == attempts - 1
+    assert len(FakeFrigateHandler.config_requests) == attempts
+
+
+def test_camera_discovery_defaults_match_the_documented_budget():
+    """The startup budget the README promises is the one the code uses."""
+
+    assert m.DEFAULT_CAMERA_DISCOVERY_ATTEMPTS == 12
+    assert m.DEFAULT_CAMERA_DISCOVERY_RETRY_SECONDS == 5.0
+
+
+def test_camera_discovery_rejects_an_empty_budget():
+    with pytest.raises(ValueError):
+        run(m.fetch_cameras_with_retry(None, attempts=0))
 
 
 def test_find_motion_intervals_per_camera(frigate_server):

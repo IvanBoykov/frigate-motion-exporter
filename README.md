@@ -128,9 +128,14 @@ Auth is attached only when `FRIGATE_USER` is set, so the same build works agains
 an authenticated reverse proxy and an open localhost instance.
 
 Cameras are discovered from `/api/config`; by default every configured camera is
-archived. Exactly one of these two may be set - setting both is a startup error
-rather than a precedence rule, because which cameras get archived should never
-be decided by an implicit ordering:
+archived. Discovery is the only Frigate call made before the per-camera
+supervisors exist, so it is retried: 12 attempts spaced 5 seconds apart, which
+outlasts a Frigate or reverse-proxy restart that overlaps this process starting.
+After the budget the error is raised and startup fails - an endpoint unreachable
+for a full minute is more likely a wrong `FRIGATE_URL` than a transient fault.
+Exactly one of these two may be set - setting both is a startup error rather
+than a precedence rule, because which cameras get archived should never be
+decided by an implicit ordering:
 
 | Variable | Meaning |
 | --- | --- |

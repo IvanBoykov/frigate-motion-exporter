@@ -88,8 +88,11 @@ the private history here contains personal hostnames. See *Publishing* below.
   function reads the environment: the S3 client is still boto3's own chain (only
   `S3_BUCKET` is ours), and everything else arrives through `Config`.
 - `async_main` starts the metrics exporter (`METRICS_PORT`, default 9108; binding it
-  is intentionally fail-fast), reads cameras from `/api/config`, narrows them with
-  `select_cameras` (`CAMERAS_INCLUDE` / `CAMERAS_EXCLUDE`, at most one), then runs one
+  is intentionally fail-fast), reads cameras from `/api/config` through
+  `fetch_cameras_with_retry` (12 tries 5 s apart - the only pre-supervisor Frigate
+  call, and a Frigate that is still booting must not kill the process; after the
+  budget startup fails), narrows them with `select_cameras` (`CAMERAS_INCLUDE` /
+  `CAMERAS_EXCLUDE`, at most one), then runs one
   `supervise_camera` task per camera. A camera task that dies - Frigate down, S3
   rejecting, a bug in the pass - is restarted by *its own* supervisor with
   exponential backoff (`CAMERA_RESTART_BACKOFF_SECONDS` doubling to
@@ -271,13 +274,14 @@ in the upload path is `bytes` for that reason; a test pins it.
 
 ## Tests
 
-`python3 -m pytest` - 151 tests, four modules, no mocks of the code under test.
+`python3 -m pytest` - 155 tests, four modules, no mocks of the code under test.
 
 `test_frigate_s3_archiver.py`: a real threaded HTTP server stands in for
 Frigate and a fake S3 client records write order. Covers auth/no-auth clients,
-per-camera interval detection, chronological upload out of shuffled input,
-fail-fast before a later clip, resume-from-bucket, skip-if-present, and one
-supervised task per camera. Long events are covered too: 25 min of motion splits
+startup camera discovery surviving a brief Frigate outage (scripted 503s,
+injected sleep, the give-up budget), per-camera interval detection,
+chronological upload out of shuffled input, fail-fast before a later clip,
+resume-from-bucket, skip-if-present, and one supervised task per camera. Long events are covered too: 25 min of motion splits
 into 10-minute chunks, a short tail near the scan boundary is deferred while the
 event may still be running, the same tail is archived once the event settles or
 once the scan window moves past it, and only the last interval is ever deferred.
