@@ -1,0 +1,8 @@
+services:
+  frigate-motion-exporter:
+    image: frigate-motion-exporter
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    ports:
+      - 9108:9108

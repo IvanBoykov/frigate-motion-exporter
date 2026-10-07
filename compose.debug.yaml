@@ -1,0 +1,9 @@
+services:
+  frigate-motion-exporter:
+    image: frigate-motion-exporter
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    command: [ "sh", "-c", "pip install debugpy -t /tmp && python /tmp/debugpy --wait-for-client --listen 0.0.0.0:5678 frigate_s3_archiver.py " ]
+    ports:
+      - 5678:5678 9108:9108
