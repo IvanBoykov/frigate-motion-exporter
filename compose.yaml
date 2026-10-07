@@ -4,5 +4,11 @@ services:
     build:
       context: .
       dockerfile: ./Dockerfile
+    # Every setting is an environment variable: copy env.example to .env and
+    # edit it there. The file is optional, so without it the container runs
+    # on the program defaults.
+    env_file:
+      - path: .env
+        required: false
     ports:
       - 9108:9108

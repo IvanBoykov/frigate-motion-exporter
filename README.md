@@ -37,6 +37,16 @@ python3 frigate_s3_archiver.py
 Every setting is an environment variable; there is no config file. The full list,
 with defaults and examples, is under [Configuration](#configuration).
 
+With Docker, put the same variables in `.env` (copy `env.example`) — both
+`compose.yaml` and `compose.debug.yaml` load it as an optional `env_file`, so
+`cp env.example .env && docker compose up` runs on those settings and without
+the file the container runs on defaults:
+
+```bash
+cp env.example .env
+docker compose up -d --build
+```
+
 Prometheus metrics are served on `:9108/metrics` (see [Metrics](#metrics)).
 
 Tests: `pip install pytest && python3 -m pytest`

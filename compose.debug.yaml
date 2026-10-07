@@ -5,5 +5,12 @@ services:
       context: .
       dockerfile: ./Dockerfile
     command: [ "sh", "-c", "pip install debugpy -t /tmp && python /tmp/debugpy --wait-for-client --listen 0.0.0.0:5678 frigate_s3_archiver.py " ]
+    # Every setting is an environment variable: copy env.example to .env and
+    # edit it there. The file is optional, so without it the container runs
+    # on the program defaults.
+    env_file:
+      - path: .env
+        required: false
     ports:
-      - 5678:5678 9108:9108
+      - 5678:5678
+      - 9108:9108
