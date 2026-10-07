@@ -2,6 +2,8 @@ import asyncio
 import math
 import os
 import re
+import signal
+import sys
 import threading
 import time
 from datetime import datetime, timedelta
@@ -1658,6 +1660,13 @@ async def async_main(config, now_fn=time.time):
     )
     print(f"Metrics: http://:{bound_port}/metrics")
 
+    try:
+        return await _run_cameras(cfg, s3_bucket, key_timezone, now_fn)
+    finally:
+        metrics.shutdown_metrics_server()
+
+
+async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
     frigate_client_factory = make_frigate_client_factory(
         cfg.frigate_url,
         username=cfg.frigate_user,
@@ -1755,13 +1764,59 @@ async def async_main(config, now_fn=time.time):
         ) from error
 
 
+async def run_until_signalled(coro):
+    """Await ``coro``; SIGINT/SIGTERM cancel it instead of interrupting Python.
+
+    Without handlers, Ctrl-C raises KeyboardInterrupt at whatever interpreter
+    line is executing and asyncio.run re-raises it with a traceback, and a
+    SIGTERM from docker or systemd kills the process mid-upload. Both signals
+    instead cancel this task here, which routes the stop through the same
+    cooperative cancellation the supervisors already handle: camera tasks
+    finish their current await point, no traceback. A second signal restores
+    the default behavior, so a wedged shutdown can still be killed outright.
+    """
+    loop = asyncio.get_running_loop()
+    task = asyncio.current_task()
+
+    def stop(sig_name):
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.remove_signal_handler(sig)
+        print(f"Received {sig_name}, shutting down...", flush=True)
+        task.cancel()
+
+    handled = []
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, partial(stop, sig.name))
+        except NotImplementedError:
+            # the event loop cannot watch signals; KeyboardInterrupt stays
+            # the stop mechanism on such platforms
+            continue
+        handled.append(sig)
+    try:
+        return await coro
+    finally:
+        for sig in handled:
+            loop.remove_signal_handler(sig)
+
+
 def main():
     """Load the environment configuration and archive until interrupted."""
     # Imported here rather than at module scope: config reads the DEFAULT_*
     # constants from this module, so importing it at the top would be circular.
     from config import load_config
 
-    asyncio.run(async_main(config=load_config()))
+    config = load_config()
+    try:
+        asyncio.run(run_until_signalled(async_main(config=config)))
+    except asyncio.CancelledError:
+        # A signal requested the stop and the cancellation path completed:
+        # an expected exit, not an error to report.
+        sys.exit(0)
+    except KeyboardInterrupt:
+        # A signal that arrived outside the loop (config loading, teardown),
+        # where the default handler still applies: also not a crash.
+        sys.exit(130)
 
 
 if __name__ == "__main__":

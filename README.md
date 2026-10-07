@@ -50,6 +50,11 @@ docker compose up -d --build
 
 Prometheus metrics are served on `:9108/metrics` (see [Metrics](#metrics)).
 
+SIGINT (Ctrl-C) and SIGTERM (`docker stop`, systemd) shut the archiver down
+gracefully: camera tasks are cancelled at their current await point, the
+metrics listener closes, and the process exits 0 without a traceback. A
+second signal kills a wedged shutdown outright.
+
 Tests: `pip install pytest && python3 -m pytest`
 
 ## Guarantees and requirements

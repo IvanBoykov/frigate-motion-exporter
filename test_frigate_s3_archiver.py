@@ -1,6 +1,9 @@
 import asyncio
 import io
 import json
+import os
+import signal
+import socket
 import struct
 import threading
 import time
@@ -2174,4 +2177,154 @@ def test_watermark_lookup_only_sees_the_configured_prefix():
 
     assert found == int(BASE_TS - 600)
     assert missed is None
+
+
+def _signal_main_env(frigate_server, monkeypatch):
+    """Patch main()'s world: one camera, fake S3, fake Frigate, port 0."""
+    async def fake_fetch(frigate_client, timeout=None):
+        return ["cam_a"]
+
+    async def fake_run_camera(camera, **kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setenv("FRIGATE_URL", frigate_server)
+    monkeypatch.setenv("S3_BUCKET", "bucket")
+    monkeypatch.setenv("FRIGATE_USER", "")
+    monkeypatch.setenv("FRIGATE_PASSWORD", "")
+    monkeypatch.setenv("METRICS_PORT", "0")
+    monkeypatch.setattr(m.boto3, "client", lambda name, **kw: FakeS3Client())
+    monkeypatch.setattr(m, "fetch_cameras", fake_fetch)
+    monkeypatch.setattr(m, "run_camera", fake_run_camera)
+    return fake_fetch
+
+
+def test_sigint_exits_cleanly_through_the_main_path(frigate_server, monkeypatch):
+    """Ctrl-C stops the run through cancellation: exit code 0, no exit error.
+
+    Without signal handlers SIGINT lands as a KeyboardInterrupt on some
+    interpreter line and asyncio.run re-raises it with a traceback; main()
+    must route the signal through the cooperative cancellation path instead.
+    main() owns asyncio.run, so the signal must arrive from a thread - the
+    loop's signal handler is what wakes the main thread.
+    """
+    _signal_main_env(frigate_server, monkeypatch)
+
+    started = threading.Event()
+    real_run_cameras = m._run_cameras
+
+    async def spy_run_cameras(cfg, s3_bucket, key_timezone, now_fn):
+        started.set()
+        return await real_run_cameras(cfg, s3_bucket, key_timezone, now_fn)
+
+    monkeypatch.setattr(m, "_run_cameras", spy_run_cameras)
+    sender = threading.Thread(
+        target=lambda: (started.wait(10), os.kill(os.getpid(), signal.SIGINT)),
+        daemon=True,
+    )
+    sender.start()
+
+    with pytest.raises(SystemExit) as exit_info:
+        m.main()
+    sender.join(timeout=10)
+
+    assert exit_info.value.code == 0
+
+
+def test_signal_during_camera_discovery_exits_cleanly(frigate_server, monkeypatch):
+    """A signal while discovery is retrying stops discovery, not just cameras.
+
+    Discovery runs before any supervisor exists. Its retry loop awaits a
+    sleep between attempts; the stop must cancel it cooperatively and still
+    exit 0 rather than unwind through the retry loop.
+    """
+    async def failing_fetch(frigate_client, timeout=None):
+        raise ConnectionError("frigate is down")
+
+    monkeypatch.setenv("FRIGATE_URL", frigate_server)
+    monkeypatch.setenv("S3_BUCKET", "bucket")
+    monkeypatch.setenv("FRIGATE_USER", "")
+    monkeypatch.setenv("FRIGATE_PASSWORD", "")
+    monkeypatch.setenv("METRICS_PORT", "0")
+    monkeypatch.setattr(m.boto3, "client", lambda name, **kw: FakeS3Client())
+    monkeypatch.setattr(m, "fetch_cameras", failing_fetch)
+
+    sender = threading.Thread(
+        target=lambda: (time.sleep(0.3), os.kill(os.getpid(), signal.SIGINT)),
+        daemon=True,
+    )
+    sender.start()
+    with pytest.raises(SystemExit) as exit_info:
+        m.main()
+    sender.join(timeout=10)
+
+    assert exit_info.value.code == 0
+
+
+def test_metrics_port_is_free_after_a_signal_stop(frigate_server, monkeypatch):
+    """The /metrics listener must not outlive the run."""
+    _signal_main_env(frigate_server, monkeypatch)
+
+    bound = {}
+    real_start = m.metrics.start_metrics_server
+
+    def spy_start(port=9108, bind=None):
+        bound["port"] = real_start(port=0)
+        return bound["port"]
+
+    monkeypatch.setattr(m.metrics, "start_metrics_server", spy_start)
+
+    def send_int():
+        for _ in range(2000):
+            if bound:
+                break
+            time.sleep(0.005)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    sender = threading.Thread(target=send_int, daemon=True)
+    sender.start()
+    with pytest.raises(SystemExit) as exit_info:
+        m.main()
+    sender.join(timeout=10)
+
+    assert exit_info.value.code == 0
+    # The listener must be gone: a connect to the old port is refused.
+    with pytest.raises(OSError):
+        probe = socket.create_connection(("127.0.0.1", bound["port"]), timeout=2)
+        probe.close()
+
+
+def test_second_signal_kills_a_wedged_shutdown():
+    """A shutdown that ignores cancellation must remain killable.
+
+    The first signal removes both handlers before cancelling, so a second
+    one lands as the default KeyboardInterrupt instead of being swallowed.
+    """
+    wedged = threading.Event()
+
+    async def body():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            wedged.set()
+            await asyncio.sleep(30)  # a shutdown that never completes
+
+    async def scenario():
+        return await m.run_until_signalled(body())
+
+    def send_signals():
+        time.sleep(0.5)
+        os.kill(os.getpid(), signal.SIGINT)
+        for _ in range(2000):
+            if wedged.is_set():
+                break
+            time.sleep(0.005)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    sender = threading.Thread(target=send_signals, daemon=True)
+    sender.start()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            asyncio.run(scenario())
+    finally:
+        sender.join(timeout=10)
 
