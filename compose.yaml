@@ -5,10 +5,10 @@ services:
       context: .
       dockerfile: ./Dockerfile
     # Every setting is an environment variable: copy env.example to .env and
-    # edit it there. The file is optional, so without it the container runs
-    # on the program defaults.
+    # edit it there. The file is required — S3_BUCKET has no default — so
+    # compose refuses to start without it rather than running on defaults.
     env_file:
       - path: .env
-        required: false
+        required: true
     ports:
       - 9108:9108

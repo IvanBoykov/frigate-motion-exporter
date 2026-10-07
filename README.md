@@ -38,9 +38,10 @@ Every setting is an environment variable; there is no config file. The full list
 with defaults and examples, is under [Configuration](#configuration).
 
 With Docker, put the same variables in `.env` (copy `env.example`) — both
-`compose.yaml` and `compose.debug.yaml` load it as an optional `env_file`, so
-`cp env.example .env && docker compose up` runs on those settings and without
-the file the container runs on defaults:
+`compose.yaml` and `compose.debug.yaml` load it as a required `env_file`:
+without the file compose refuses to start, because `S3_BUCKET` has no
+default. Compose also auto-loads a shell-style `.env` from this directory,
+so the file serves both paths:
 
 ```bash
 cp env.example .env
