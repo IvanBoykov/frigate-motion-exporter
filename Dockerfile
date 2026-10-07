@@ -18,7 +18,7 @@ WORKDIR /app
 # Префикс /install корректно ложится в /usr/local, 
 # который уже находится в PATH и PYTHONPATH базового образа.
 COPY --from=deps /install /usr/local
-
+ENV PYTHONUNBUFFERED=1
 # Копируем исходный код проекта
 COPY . .
 
