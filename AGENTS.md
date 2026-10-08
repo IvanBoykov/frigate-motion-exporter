@@ -57,6 +57,14 @@ repository root, and `conftest.py` puts `src/` on `sys.path` so `pytest` resolve
 modules from either location. The Docker image copies `src/` to the working directory,
 so inside the image the module names are unchanged (`python frigate_s3_archiver.py`).
 
+The repository and the module carry different names deliberately, and that is settled:
+do not "harmonize" them. `frigate_s3_archiver` names what it does and where it writes,
+which keeps room for a sibling with a different destination (`frigate_localdir_archiver`);
+`frigate-motion-exporter` names the job for the operator. Renaming the module would trade
+a meaningful name for a cosmetic match and break the image entrypoint, which runs it by
+filename (`Dockerfile:31`). README and this file reference the module and test names by
+path throughout, so treat them all as load-bearing.
+
 - `src/frigate_s3_archiver.py` - the archiver: motion-interval
   detection plus streaming each clip straight into S3 with multipart upload and
   resuming from a watermark derived from S3 keys (`get_last_processed_time`), so

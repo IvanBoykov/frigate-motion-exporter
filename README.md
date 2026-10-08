@@ -57,6 +57,18 @@ second signal kills a wedged shutdown outright.
 
 Tests: `pip install pytest && python3 -m pytest`
 
+## Naming
+
+The repository is `frigate-motion-exporter`; the code that does the work is
+`src/frigate_s3_archiver.py`. The two names differ on purpose. The module name says
+what it does and where it writes, which leaves room for siblings that archive
+somewhere else - `frigate_localdir_archiver.py`, say. The repository name describes
+the job from the operator's side: it exports motion out of Frigate.
+
+There is no installable package: no `pyproject.toml`, no `__init__.py`. `conftest.py`
+puts `src/` on `sys.path` for tests, and the image runs the module by filename, so
+every path in this file is literal.
+
 ## Guarantees and requirements
 
 The guarantees below hold when the requirements below hold. Everything the script
