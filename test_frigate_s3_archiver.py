@@ -667,6 +667,64 @@ def run_camera_options():
     }
 
 
+def test_intervals_found_gauge_tracks_each_search(frigate_server, monkeypatch):
+    """The gauge holds the count this pass's search returned, including 0."""
+    client = make_client(frigate_server)
+    s3 = FakeS3Client()
+    seen = []
+    real_upload_intervals = m.upload_intervals
+
+    async def spy_upload_intervals(intervals, **kwargs):
+        seen.append(
+            metrics.CAMERA_MOTION_INTERVALS_FOUND.labels(camera="cam_a")._value.get()
+        )
+        return await real_upload_intervals(intervals, **kwargs)
+
+    monkeypatch.setattr(m, "upload_intervals", spy_upload_intervals)
+
+    with pytest.raises(StopLoop):
+        run(
+            m.run_camera(
+                camera="cam_a",
+                frigate_client=client,
+                s3_bucket="bucket",
+                s3_client=s3,
+                now_fn=ScriptedClock(END_TS, calls=3),
+                **run_camera_options(),
+            )
+        )
+
+    # cam_a has two motion intervals in the scan window, and the pass that
+    # archived them reported exactly that.
+    assert seen == [2]
+    # The follow-up pass found nothing, and the gauge reads the latest search,
+    # not the last one that found something.
+    assert metrics.CAMERA_MOTION_INTERVALS_FOUND.labels(camera="cam_a")._value.get() == 0
+
+
+def test_intervals_found_gauge_is_zero_without_motion(frigate_server):
+    """A search that returns nothing reads 0, not a stale count."""
+    client = make_client(frigate_server)
+    s3 = FakeS3Client()
+    FakeFrigateHandler.segments_by_camera["cam_a"] = make_segments([0] * SEGMENTS_PER_CAMERA)
+    metrics.CAMERA_MOTION_INTERVALS_FOUND.labels(camera="cam_a").set(7)
+
+    with pytest.raises(StopLoop):
+        run(
+            m.run_camera(
+                camera="cam_a",
+                frigate_client=client,
+                s3_bucket="bucket",
+                s3_client=s3,
+                now_fn=ScriptedClock(END_TS, calls=3),
+                **run_camera_options(),
+            )
+        )
+
+    assert s3.puts == []
+    assert metrics.CAMERA_MOTION_INTERVALS_FOUND.labels(camera="cam_a")._value.get() == 0
+
+
 def test_run_camera_uploads_then_rescans_from_new_watermark(frigate_server):
     """One pass archives everything, the next pass finds nothing new."""
     client = make_client(frigate_server)

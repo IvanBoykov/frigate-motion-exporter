@@ -183,6 +183,7 @@ startup rather than silently disabling observability.
 | `camera_restarts_total` | Counter | `camera` | Times a camera task died and was restarted |
 | `camera_consecutive_failures` | Gauge | `camera` | Crash/restart count since the last healthy pass |
 | `camera_task_running` | Gauge | `camera` | 1 while the camera task works (watermark resolved); 0 at startup, on a wedged watermark read, during backoff |
+| `camera_motion_intervals_found` | Gauge | `camera` | Intervals returned by the camera's most recent motion-interval search; 0 while the latest search found nothing, stale while the search itself fails |
 
 `frigate_response_seconds{kind="json"}` covers the metadata requests
 (`/api/config`, `/api/{camera}/recordings`); `kind="clip_ttfb"` measures the time

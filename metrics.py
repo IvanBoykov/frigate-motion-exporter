@@ -79,6 +79,13 @@ CAMERA_CONSECUTIVE_FAILURES = Gauge(
     "Failures of a camera task since its last healthy pass",
     ["camera"],
 )
+CAMERA_MOTION_INTERVALS_FOUND = Gauge(
+    "camera_motion_intervals_found",
+    "Intervals returned by this camera's most recent motion-interval search;"
+    " 0 while the latest search found nothing, stale if the search itself"
+    " failed",
+    ["camera"],
+)
 
 _metrics_httpd = None
 

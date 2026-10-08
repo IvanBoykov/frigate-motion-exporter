@@ -1499,6 +1499,9 @@ async def run_camera(
             recordings_timeout=DEFAULT_RECORDINGS_TIMEOUT,
             min_start_ts=watermark,
         )
+        metrics.CAMERA_MOTION_INTERVALS_FOUND.labels(camera=camera).set(
+            len(intervals)
+        )
 
         if not intervals:
             print(
