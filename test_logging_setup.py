@@ -168,3 +168,22 @@ def test_json_formatter_keeps_a_traceback_in_one_field(log_stream):
     assert payload["level"] == "ERROR"
     assert "ValueError: bad segment" in payload["exc"]
     assert payload["exc"].count("Traceback") == 1
+
+
+def test_library_debug_chatter_stays_out_while_ours_passes(log_stream):
+    """DEBUG means our debug lines, not the SDK's firehose.
+
+    boto3 and urllib3 log every signature and retry decision at DEBUG; the
+    retry facts that matter arrive through our own needs-retry hook, so the
+    libraries are floored at WARNING - their problems still reach the log.
+    """
+    logging.getLogger("botocore.retries.standard").debug(
+        "Retry needed, retrying request after delay of: 0.38"
+    )
+    logging.getLogger("botocore").warning("a real SDK problem")
+    logging.getLogger("frigate_s3_archiver").debug("one of ours")
+
+    text = log_stream.getvalue()
+    assert "Retry needed" not in text
+    assert "one of ours" in text
+    assert "a real SDK problem" in text

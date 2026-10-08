@@ -243,10 +243,16 @@ message: with `LOG_JSON=true` the same line becomes a JSON object with a real
 INFO is the service-running setting: startup summary, `Intervals found`/
 `Uploaded` per pass, watermark resume, and every anomaly - truncated clips,
 `-no-recordings` markers, malformed segments, supervisor restarts, the fatal
-error with its traceback. DEBUG adds the per-clip S3 keys (`Uploaded (single
-PUT)`/`(multipart)`, `Already uploaded`) and the idle sleep cycles - useful
-for one investigation, too loud to leave on. An unreadable `LOG_LEVEL` fails
-startup naming the variable.
+error with its traceback. DEBUG adds what a retry or a stall is waiting on:
+every SDK-internal S3 retry (`S3 attempt N failed during HeadObject: ...`,
+through a hook on the boto3 client, since those retries happen inside the
+SDK without a task restart), each clip-window retry pause with the fault it
+waits out, the scan windows queried with their segment counts, the S3
+prefixes the watermark listing walks, deferred ongoing tails, and the
+per-clip S3 keys. The boto3/urllib3 debug firehose (signatures, headers,
+their own retry lines) is silenced - the retry facts arrive through our own
+lines. DEBUG is useful for one investigation, too loud to leave on. An
+unreadable `LOG_LEVEL` fails startup naming the variable.
 
 ### S3
 

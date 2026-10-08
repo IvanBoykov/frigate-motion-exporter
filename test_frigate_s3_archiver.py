@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import requests
+from botocore.exceptions import EndpointConnectionError
 
 import frigate_s3_archiver as m
 import logging_setup
@@ -276,6 +277,11 @@ class FakeS3Client:
     """Records the objects that would have been written, in call order."""
 
     class _Meta:
+        class events:
+            @staticmethod
+            def register(event_name, handler):
+                pass
+
         endpoint_url = "https://s3.fake.local"
         region_name = "fake-region-1"
 
@@ -1197,17 +1203,28 @@ def test_s3_client_stays_on_the_default_credential_chain(monkeypatch):
     # Nothing but the time budget may be pinned in code: credentials, region
     # and endpoint must keep coming from the standard boto3 chain.
     seen = {}
+    registered = []
+
+    class FakeEvents:
+        def register(self, event_name, handler):
+            registered.append((event_name, handler))
+
+    class FakeClient:
+        def __init__(self):
+            self.meta = type("Meta", (), {"events": FakeEvents()})()
 
     def fake_client(name, **kw):
         seen["name"] = name
         seen["kw"] = kw
-        return object()
+        return FakeClient()
 
     monkeypatch.setattr(m.boto3, "client", fake_client)
     m.make_s3_client()
 
     assert seen["name"] == "s3"
     assert set(seen["kw"]) == {"config"}
+    # SDK-internal retries become our own DEBUG lines through this hook.
+    assert registered == [("needs-retry", m._log_boto_retry)]
 
 
 def test_s3_client_rejects_a_non_positive_time_budget():
@@ -2496,7 +2513,10 @@ def test_start_camera_binds_the_camera_for_its_tasks_lines(
     ]
     # The field, not the message: each camera tagged its own lines.
     assert all(p["message"].endswith(p["camera"]) for p in done)
-    assert all("camera" not in p["message"] for p in payloads)
+    # The startup enumeration names cameras in its message but belongs to no
+    # camera, so it must carry no camera field.
+    listed = [p for p in payloads if p["message"].startswith("Cameras:")]
+    assert listed and all("camera" not in p for p in listed)
 
 
 def test_human_ts_renders_the_instant_in_the_key_timezone():
@@ -2506,6 +2526,244 @@ def test_human_ts_renders_the_instant_in_the_key_timezone():
     assert m.human_ts(1700000000, ZoneInfo("Europe/Moscow")) == (
         "2023-11-15 01:13:20 MSK"
     )
+
+
+def test_sdk_retries_log_as_debug_lines(monkeypatch, caplog):
+    """A retry inside the SDK, invisible to our code, becomes our own line.
+
+    boto3 retries an S3 operation up to its attempt budget without our code
+    or a task restart noticing - the gap the metric never shows. Against a
+    dead endpoint with a real client, every failed attempt logs one of our
+    DEBUG lines naming the operation and the reason; the SDK's own retry
+    logger is silenced, so DEBUG stays readable.
+    """
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "x")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "y")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_ENDPOINT_URL_S3", "http://127.0.0.1:9")
+    monkeypatch.setenv("LOG_JSON", "false")
+    caplog.set_level(logging.DEBUG, logger="frigate_s3_archiver")
+
+    client = m.make_s3_client(
+        connect_timeout_seconds=1, read_timeout_seconds=1, total_max_attempts=2
+    )
+    with pytest.raises(EndpointConnectionError):
+        client.head_object(Bucket="bucket", Key="cam_a/k.mp4")
+
+    text = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "frigate_s3_archiver"
+    ]
+    attempts = [line for line in text if "S3 attempt" in line]
+    assert len(attempts) == 2, attempts
+    assert all("HeadObject" in line for line in attempts)
+    assert "S3 attempt 1 failed during HeadObject" in attempts[0]
+    assert "S3 attempt 2 failed during HeadObject" in attempts[1]
+    assert all("EndpointConnectionError" in line for line in attempts)
+
+
+def test_a_truncated_retry_pause_logs_the_fault_it_retries(
+    frigate_server, caplog
+):
+    """The silent sleep between clip attempts says what it waits out."""
+    FakeFrigateHandler.truncate_clip_attempts = 1
+    client = make_client(frigate_server)
+    caplog.set_level(logging.DEBUG, logger="frigate_s3_archiver")
+
+    is_new, was_truncated = run(
+        m.upload_clip_hybrid(
+            camera="cam_a",
+            start_ts=CLIP_WINDOW[0],
+            end_ts=CLIP_WINDOW[1],
+            frigate_client=client,
+            s3_bucket="bucket",
+            s3_client=FakeS3Client(),
+            clip_retries=1,
+            clip_retry_max_delay=1,
+        )
+    )
+
+    assert (is_new, was_truncated) == (True, False)
+    text = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "frigate_s3_archiver"
+    ]
+    pause = [line for line in text if "came back truncated" in line]
+    assert len(pause) == 1
+    assert "Attempt 1/2" in pause[0]
+    assert "retrying in 1.0 s" in pause[0]
+
+
+def test_an_unavailable_retry_pause_logs_the_fault_it_retries(
+    frigate_server, caplog
+):
+    """The unavailable-window pause says which answer it waits out."""
+    FakeFrigateHandler.no_recordings_attempts = None
+    client = make_client(frigate_server)
+    caplog.set_level(logging.DEBUG, logger="frigate_s3_archiver")
+
+    run(
+        m.upload_clip_hybrid(
+            camera="cam_a",
+            start_ts=CLIP_WINDOW[0],
+            end_ts=CLIP_WINDOW[1],
+            frigate_client=client,
+            s3_bucket="bucket",
+            s3_client=FakeS3Client(),
+            clip_retries=1,
+            clip_retry_max_delay=1,
+        )
+    )
+
+    text = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "frigate_s3_archiver"
+    ]
+    pause = [line for line in text if "found the recordings unavailable" in line]
+    assert len(pause) == 1
+    assert "NoRecordingsError" in pause[0]
+    assert "retrying in 1.0 s" in pause[0]
+
+
+def test_the_scan_logs_each_queried_window(frigate_server, caplog):
+    """Each Frigate recordings query is visible at DEBUG."""
+    caplog.set_level(logging.DEBUG, logger="frigate_s3_archiver")
+
+    scan_window(frigate_server, [1, 1, 0, 0], scan_segments=4)
+
+    text = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "frigate_s3_archiver"
+    ]
+    queried = [line for line in text if line.startswith("Segments queried")]
+    assert len(queried) == 1
+    assert "4 returned" in queried[0]
+    assert str(BASE_TS) in queried[0]
+
+
+def test_the_watermark_listing_logs_each_prefix_it_walks(caplog):
+    """A watermark read stuck on a slow endpoint shows its last prefix."""
+    caplog.set_level(logging.DEBUG, logger="frigate_s3_archiver")
+
+    m.get_last_processed_time(
+        camera="cam_a",
+        s3_bucket="bucket",
+        s3_client=FakeS3Client(),
+        now_ts=BASE_TS,
+        lookback_seconds=3600,
+    )
+
+    text = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "frigate_s3_archiver"
+    ]
+    listings = [line for line in text if line.startswith("Listing cam_a/")]
+    assert listings, text
+    assert all(line.endswith("to find the newest clip") for line in listings)
+
+
+def test_a_deferred_tail_logs_why_the_interval_waits(caplog):
+    """The reason a fresh interval is not archived this pass is visible."""
+    caplog.set_level(logging.DEBUG, logger="frigate_s3_archiver")
+
+    chunks = m.split_interval_for_archive(
+        interval_start=0,
+        interval_end=700,
+        scan_end_ts=750,
+        chunk_seconds=600,
+        max_gap_seconds=120,
+        is_last_interval=True,
+    )
+
+    assert chunks == [(0, 600)]
+    text = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "frigate_s3_archiver"
+    ]
+    deferred = [line for line in text if "Deferred the ongoing tail" in line]
+    assert len(deferred) == 1
+    assert "600..700" in deferred[0]
+
+
+def test_a_cancelled_worker_thread_logs_its_checkpoint(caplog):
+    """Stopping for cancellation and a failed abort both leave a line.
+
+    The abort swallowing is deliberate - the upload must fail with its own
+    error - but the orphan it leaves in the bucket is billed, so the failure
+    at least says so.
+    """
+    caplog.set_level(logging.DEBUG, logger="frigate_s3_archiver")
+    cancel_event = threading.Event()
+
+    class AbortingS3(FakeS3Client):
+        def upload_part(self, Bucket, Key, UploadId, PartNumber, Body):
+            cancel_event.set()
+            return super().upload_part(
+                Bucket, Key, UploadId, PartNumber, Body
+            )
+
+        def abort_multipart_upload(self, Bucket, Key, UploadId):
+            raise RuntimeError("endpoint gone")
+
+    s3 = AbortingS3()
+    stream = iter([b"y" * (4 * 1024 * 1024)] * 4)
+
+    class StreamingResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size=None):
+            return stream
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class StreamingSession:
+        def get(self, url, stream=False, timeout=None):
+            return StreamingResponse()
+
+    with pytest.raises(asyncio.CancelledError):
+        m._upload_clip_hybrid_sync(
+            camera="cam_a",
+            start_ts=float(BASE_TS),
+            end_ts=float(BASE_TS + 10 * SEGMENT_SECONDS),
+            frigate_client={
+                "session": StreamingSession(),
+                "base_url": "http://fake",
+            },
+            s3_bucket="bucket",
+            s3_client=s3,
+            key_timezone=m.DEFAULT_S3_KEY_TIMEZONE,
+            part_size=m.DEFAULT_PART_SIZE,
+            http_chunk_size=1024 * 1024,
+            http_timeout=30,
+            cancel_event=cancel_event,
+        )
+
+    assert s3.aborted == []
+    text = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "frigate_s3_archiver"
+    ]
+    assert any("Stopping the worker thread" in line for line in text)
+    abort_line = [
+        line for line in text if "Could not abort multipart upload" in line
+    ]
+    assert len(abort_line) == 1
+    assert "upload-1" in abort_line[0]
+    assert "endpoint gone" in abort_line[0]
 
 
 def test_a_watermark_start_reads_as_a_date_not_a_bare_epoch(

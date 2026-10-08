@@ -118,6 +118,46 @@ DEFAULT_S3_TOTAL_MAX_ATTEMPTS = 10
 DEFAULT_S3_RETRY_MODE = "standard"
 
 
+def _log_boto_retry(response=None, caught_exception=None, **kwargs):
+    """Log every retry boto3 is about to do, as a line of ours.
+
+    Registered on the client's needs-retry event: an S3 operation is retried
+    by the SDK within its attempt budget (10 by default here), invisible to
+    our code and without a task restart. Those retries are exactly the pauses
+    a DEBUG log should account for - a head_object against a slow endpoint
+    can spend its whole budget inside one worker thread - but the SDK writes
+    them to its own logger at DEBUG, where an unreadable firehose buries
+    every useful line. This handler replaces that chatter with one line per
+    retry naming the operation, the attempt, and why.
+
+    It must never raise and never return a value: this is botocore's shared
+    handler chain, where a raised error would break the request and a
+    non-None return would be read as a retry-delay decision.
+    """
+    try:
+        operation = getattr(kwargs.get("operation"), "name", "?")
+        attempt = kwargs.get("attempts") or "?"
+        if caught_exception is not None:
+            reason = f"{type(caught_exception).__name__}: {caught_exception}"
+        elif isinstance(response, tuple) and len(response) == 2:
+            body = response[1] or {}
+            code = (body.get("Error") or {}).get("Code", "?")
+            status = (body.get("ResponseMetadata") or {}).get(
+                "HTTPStatusCode", "?"
+            )
+            reason = f"S3 responded {status} {code}"
+        else:
+            reason = "unknown"
+        log.debug(
+            "S3 attempt %s failed during %s: %s",
+            attempt,
+            operation,
+            reason,
+        )
+    except Exception:
+        pass
+
+
 def make_s3_client(
     connect_timeout_seconds=DEFAULT_S3_CONNECT_TIMEOUT_SECONDS,
     read_timeout_seconds=DEFAULT_S3_READ_TIMEOUT_SECONDS,
@@ -134,7 +174,7 @@ def make_s3_client(
     if total_max_attempts < 1:
         raise ValueError("total_max_attempts must be >= 1")
 
-    return boto3.client(
+    client = boto3.client(
         "s3",
         config=Config(
             connect_timeout=connect_timeout_seconds,
@@ -145,6 +185,8 @@ def make_s3_client(
             },
         ),
     )
+    client.meta.events.register("needs-retry", _log_boto_retry)
+    return client
 
 
 def make_frigate_client(
@@ -439,6 +481,14 @@ def split_interval_for_archive(
             is_last_interval
             and scan_end_ts - tail_end < max_gap_seconds
         ):
+            log.debug(
+                "Deferred the ongoing tail %s..%s: its end is %.1f s from "
+                "the scan boundary, closer than max_gap %.1f s",
+                int(chunk_start),
+                int(tail_end),
+                scan_end_ts - tail_end,
+                max_gap_seconds,
+            )
             return chunks
 
         chunks.append((chunk_start, tail_end))
@@ -508,6 +558,14 @@ async def find_motion_intervals(
             before_ts=chunk_end,
             frigate_client=frigate_client,
             timeout=recordings_timeout,
+        )
+        # Epoch, not human_ts: these are exactly the after=/before= the
+        # query sent, which is what a debug reader correlates against.
+        log.debug(
+            "Segments queried %s..%s: %d returned",
+            int(fetch_start),
+            int(chunk_end),
+            len(segments),
         )
 
         normalized_segments = []
@@ -747,6 +805,9 @@ def get_last_processed_time(
 
     while current_date <= end_date:
         prefix = f"{key_prefix}{camera}/{current_date:%Y/%m/%d}/"
+        # One line per listed day: a watermark read stuck on a slow endpoint
+        # shows as the last prefix logged, which is the whole diagnostic.
+        log.debug("Listing %s to find the newest clip", prefix)
 
         try:
             pages = paginator.paginate(
@@ -822,6 +883,11 @@ def _check_cancelled(cancel_event, camera, s3_key):
     if cancel_event is None or not cancel_event.is_set():
         return
     metrics.record_failure(camera, "cancelled")
+    log.debug(
+        "Stopping the worker thread at a checkpoint: %s was being uploaded "
+        "when the task was cancelled",
+        s3_key,
+    )
     raise asyncio.CancelledError(
         f"{camera}: upload of {s3_key} stopped by task cancellation"
     )
@@ -1135,8 +1201,16 @@ def _upload_clip_hybrid_sync(
                     Key=s3_key,
                     UploadId=upload_id,
                 )
-            except Exception:
-                pass
+            except Exception as abort_exc:
+                # The abort is best-effort - the upload must still fail with
+                # its own error, not this one - but a failed abort leaves a
+                # billed orphan, which is worth a debug line at DEBUG.
+                log.debug(
+                    "Could not abort multipart upload %s: %s: %s",
+                    upload_id,
+                    type(abort_exc).__name__,
+                    abort_exc,
+                )
             raise
 
 
@@ -1281,7 +1355,7 @@ async def upload_clip_hybrid(
         except asyncio.CancelledError:
             cancel_event.set()
             raise
-        except (metrics.NoRecordingsError, metrics.EmptyClipError):
+        except (metrics.NoRecordingsError, metrics.EmptyClipError) as exc:
             # Either answer means the window's recordings no longer exist:
             # the 400 is an empty database query, the empty 200 is ffmpeg
             # failing to open files the database still lists. Both are
@@ -1313,9 +1387,19 @@ async def upload_clip_hybrid(
                     ).inc()
                 return is_new, False
             delay = clip_retry_delay(attempt, max_delay=clip_retry_max_delay)
+            log.debug(
+                "Attempt %d/%d for window %s-%s found the recordings "
+                "unavailable (%s); retrying in %.1f s",
+                attempt + 1,
+                int(clip_retries) + 1,
+                human_ts(start_ts, key_timezone),
+                human_ts(end_ts, key_timezone),
+                type(exc).__name__,
+                delay,
+            )
             if delay > 0:
                 await asyncio.sleep(delay)
-        except metrics.ClipTruncatedError:
+        except metrics.ClipTruncatedError as exc:
             if clip_retries <= 0:
                 raise
             seen_faults.add("truncated")
@@ -1327,6 +1411,16 @@ async def upload_clip_hybrid(
                     raise
                 break
             delay = clip_retry_delay(attempt, max_delay=clip_retry_max_delay)
+            log.debug(
+                "Attempt %d/%d for window %s-%s came back truncated (%s); "
+                "retrying in %.1f s",
+                attempt + 1,
+                int(clip_retries) + 1,
+                human_ts(start_ts, key_timezone),
+                human_ts(end_ts, key_timezone),
+                exc,
+                delay,
+            )
             if delay > 0:
                 await asyncio.sleep(delay)
 
@@ -1706,6 +1800,7 @@ async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
 
     cameras = await fetch_cameras_with_retry(frigate_client)
     discovered = list(cameras)
+    log.debug("Discovered cameras: %s", ", ".join(discovered) or "(none)")
     cameras = select_cameras(
         cameras, include=cfg.cameras_include, exclude=cfg.cameras_exclude
     )
@@ -1717,13 +1812,15 @@ async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
     log.info("Cameras: %s", ", ".join(cameras))
 
     def start_camera(camera):
-        # Bound before the Task is created: the Task and every worker thread
-        # asyncio later spawns from it inherit the binding, so every line
-        # this camera produces - including uploads logged in to_thread
-        # workers - carries the camera without any call site passing it.
-        logging_setup.bind_camera(camera)
-        return asyncio.create_task(
-            supervise_camera(
+        async def supervised():
+            # Bound inside the Task, not in this caller: the binding then
+            # lives in the task's own context (create_task copies it) and is
+            # inherited by every worker thread asyncio spawns from it, so
+            # every line this camera produces - including uploads logged in
+            # to_thread workers - carries the camera, while lifecycle lines
+            # logged by the calling task stay untagged.
+            logging_setup.bind_camera(camera)
+            await supervise_camera(
                 camera,
                 lambda on_pass_ok: run_camera(
                     camera=camera,
@@ -1747,9 +1844,9 @@ async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
                 ),
                 backoff_seconds=cfg.camera_restart_backoff_seconds,
                 backoff_max_seconds=cfg.camera_restart_backoff_max_seconds,
-            ),
-            name=f"supervisor:{camera}",
-        )
+            )
+
+        return asyncio.create_task(supervised(), name=f"supervisor:{camera}")
 
     supervisors = {camera: start_camera(camera) for camera in cameras}
 

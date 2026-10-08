@@ -37,6 +37,13 @@ LOG_LEVELS = {
     "DEBUG": logging.DEBUG,
 }
 
+# The libraries whose DEBUG output the archiver has no use for: boto3/botocore
+# and urllib3 write every signature, request header, and retry decision of
+# every S3 call at DEBUG. The SDK-internal retries that matter are already
+# logged through the client's needs-retry hook, so the firehose would only
+# bury the useful DEBUG lines. Their WARNING and above still passes.
+NOISY_LOGGERS = ("botocore", "boto3", "urllib3", "s3transfer")
+
 
 class CameraFormatter(logging.Formatter):
     """``time level camera message``, the shape every log line has today.
@@ -115,6 +122,8 @@ def configure_logging(level=logging.INFO, json_format=False, stream=None):
         existing.close()
     root.addHandler(handler)
     root.setLevel(level)
+    for name in NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
     return handler
 
 
