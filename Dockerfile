@@ -2,29 +2,30 @@ FROM python:3.14-slim AS deps
 
 WORKDIR /build
 
-# Копируем только файл зависимостей для использования кэша Docker
+# Copy only the dependency file so the Docker layer cache is reusable.
 COPY requirements.txt .
 
-# Устанавливаем зависимости в изолированный префикс.
-# --no-cache-dir уменьшает размер слоя.
+# Install dependencies into an isolated prefix.
+# --no-cache-dir keeps the layer smaller.
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# Финальная стадия (Runtime)
+# Final stage (runtime)
 FROM python:3.14-slim
 
 WORKDIR /app
 
-# Копируем установленные зависимости из стадии deps.
-# Префикс /install корректно ложится в /usr/local, 
-# который уже находится в PATH и PYTHONPATH базового образа.
+# Copy the installed dependencies from the deps stage.
+# The /install prefix lands cleanly in /usr/local,
+# which is already on PATH and PYTHONPATH in the base image.
 COPY --from=deps /install /usr/local
 ENV PYTHONUNBUFFERED=1
-# Создаем непривилегированного пользователя для безопасности
+# Run as an unprivileged user.
 RUN useradd -m -r appuser
-# Копируем исходный код проекта
+# Copy the application code; src/ becomes the working directory, so the
+# entrypoint runs frigate_s3_archiver.py as a top-level module.
 COPY --chown=appuser:appuser src/ ./
 
 USER appuser
 
-# Точка входа
+# Entrypoint
 ENTRYPOINT ["python", "frigate_s3_archiver.py"]

@@ -5,10 +5,13 @@ services:
       context: .
       dockerfile: ./Dockerfile
     # Every setting is an environment variable: copy env.example to .env and
-    # edit it there. The file is required — S3_BUCKET has no default — so
+    # edit it there. The file is required - S3_BUCKET has no default - so
     # compose refuses to start without it rather than running on defaults.
     env_file:
       - path: .env
         required: true
     ports:
+      # /metrics has no auth; this publishes it on every host interface. Bind to
+      # loopback (127.0.0.1:9108:9108) or firewall the port if the host is exposed
+      # - see the Metrics section of README.md.
       - 9108:9108

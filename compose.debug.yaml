@@ -6,7 +6,7 @@ services:
       dockerfile: ./Dockerfile
     command: [ "sh", "-c", "pip install debugpy -t /tmp && python /tmp/debugpy --wait-for-client --listen 0.0.0.0:5678 frigate_s3_archiver.py " ]
     # Every setting is an environment variable: copy env.example to .env and
-    # edit it there. The file is required — S3_BUCKET has no default — so
+    # edit it there. The file is required - S3_BUCKET has no default - so
     # compose refuses to start without it rather than running on defaults.
     env_file:
       - path: .env

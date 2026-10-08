@@ -9,7 +9,7 @@ expires it, so footage stays queryable and playable independently of the NVR. Ru
 it when you want motion footage kept for as long as the bucket is kept, without
 extending Frigate's disk retention.
 
-`frigate_s3_archiver.py` discovers cameras via Frigate's `/api/config`, then runs
+`src/frigate_s3_archiver.py` discovers cameras via Frigate's `/api/config`, then runs
 one worker per camera: it resumes from a watermark derived from the newest clip
 key in the bucket, detects motion intervals, splits long events into 10-minute
 chunks, and streams each clip into S3 (single `PUT` or multipart) in strict
@@ -31,13 +31,13 @@ export AWS_REGION=us-east-1
 # export AWS_ENDPOINT_URL_S3=https://s3.example.internal
 export S3_BUCKET=my-motion-archive
 
-python3 frigate_s3_archiver.py
+python3 src/frigate_s3_archiver.py
 ```
 
 Every setting is an environment variable; there is no config file. The full list,
 with defaults and examples, is under [Configuration](#configuration).
 
-With Docker, put the same variables in `.env` (copy `env.example`) — both
+With Docker, put the same variables in `.env` (copy `env.example`) - both
 `compose.yaml` and `compose.debug.yaml` load it as a required `env_file`:
 without the file compose refuses to start, because `S3_BUCKET` has no
 default. Compose also auto-loads a shell-style `.env` from this directory,
@@ -66,7 +66,9 @@ requirements.
 
 Requirements:
 
-- **Runtime:** Python 3.13 and the packages in `requirements.txt`. The script keeps
+- **Runtime:** Python 3.14 and the packages in `requirements.txt` (the Docker
+  image uses `python:3.14-slim`, which is also the interpreter `pip-compile` pinned the
+  lock with). The script keeps
   no local state: no scratch disk, no database, nothing to back up.
 - **Frigate:** reachable over HTTP(S), with Basic Auth credentials if the deployment
   has an auth layer. Behavior-verified against 0.17.0; the *Frigate API assumptions*
@@ -166,6 +168,12 @@ An invalid regex fails at startup and names the variable.
 | --- | --- | --- |
 | `METRICS_PORT` | TCP port serving `/metrics` | `9108` |
 | `METRICS_BIND` | Address to bind the metrics listener to | `0.0.0.0` |
+
+The listener has no authentication and no TLS. `0.0.0.0` is the default because the
+common deployment scrapes it from another host or container, but it means anyone who
+can reach the port can read your camera names and activity: set `METRICS_BIND` to
+`127.0.0.1` and scrape through a reverse proxy or a sidecar, or restrict the port at
+the firewall, unless the network it listens on is already trusted.
 
 The exporter is a separate listener, so scrapes cannot be queued behind
 archiving work, and a metrics port that cannot be bound fails the process at
@@ -338,7 +346,7 @@ s3 =
 ```bash
 export AWS_PROFILE=mystorage
 export S3_BUCKET=my-motion-archive
-python3 frigate_s3_archiver.py
+python3 src/frigate_s3_archiver.py
 ```
 
 At startup the script prints the effective bucket, key prefix, endpoint and
@@ -465,3 +473,6 @@ covers the proxy case: a first attempt truncated by a dying Frigate followed
 by 503s from the proxy during its restart ends the chain at the first 503
 (a service fault is never retried at this level) and archives nothing.
 
+## License
+
+GNU GPL v3.0 - see `LICENSE`.

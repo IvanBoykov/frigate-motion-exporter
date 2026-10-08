@@ -52,27 +52,53 @@ the private history here contains personal hostnames. See *Publishing* below.
 
 ## Repository layout
 
-- `frigate_s3_archiver.py` - the archiver: motion-interval
+All application modules live in `src/`; tests, docs, and packaging files stay at the
+repository root, and `conftest.py` puts `src/` on `sys.path` so `pytest` resolves the
+modules from either location. The Docker image copies `src/` to the working directory,
+so inside the image the module names are unchanged (`python frigate_s3_archiver.py`).
+
+- `src/frigate_s3_archiver.py` - the archiver: motion-interval
   detection plus streaming each clip straight into S3 with multipart upload and
   resuming from a watermark derived from S3 keys (`get_last_processed_time`), so
   it is stateless apart from S3 itself. (An earlier local-disk prototype,
   `download.py`, was removed once this became the service.)
-- `metrics.py` - Prometheus definitions, the error-kind vocabulary, and the `/metrics`
+- `src/metrics.py` - Prometheus definitions, the error-kind vocabulary, and the `/metrics`
   listener. The archiver imports it and calls it; no metric is defined elsewhere.
-- `mp4_tail.py` - decides whether the tail of an MP4 proves the export finished:
+- `src/mp4_tail.py` - decides whether the tail of an MP4 proves the export finished:
   searches backwards from EOF for an `mfra`/`moov`/`mdat` signature and accepts the
   stream only when that box's declared size lands exactly on EOF. Used to tell a
   complete clip from one cut mid-export; no metric or S3 code.
-- `config.py` - the only module that reads tuning knobs from the environment.
-  `load_config()` returns one frozen `Config` dataclass; every value is parsed and
-  range-checked there, so an invalid setting exits at startup with the variable
-  name in the message instead of failing mid-clip. `ConfigError` is a `SystemExit`.
+- `src/logging_setup.py` - logging configuration: leveled output on stderr, a
+  `camera` field rendered by the formatter (bound through a `contextvars`
+  variable, so per-camera context needs no parameter threading), and a JSON
+  formatter selected by `LOG_JSON`. Call sites never change between formats.
+- `src/config.py` - reads the tuning knobs into one frozen `Config` dataclass at
+  startup. `load_config()` returns it; every value is parsed and range-checked
+  there, so an invalid setting exits at startup with the variable name in the
+  message instead of failing mid-clip. `ConfigError` is a `SystemExit`.
   It imports the `DEFAULT_*` constants from `frigate_s3_archiver` (one direction
   only - the archiver imports `config` inside `main()` to avoid a cycle).
-- `test_frigate_s3_archiver.py`, `test_metrics.py`, `test_mp4_tail.py`,
-  `test_config.py` - see *Tests*.
+  Two settings deliberately bypass it: `METRICS_PORT`/`METRICS_BIND` are read by
+  `src/metrics.py` at bind time, and `make_frigate_client` falls back to
+  `FRIGATE_USER`/`FRIGATE_PASSWORD` when called without explicit credentials.
+- `conftest.py` - puts `src/` on `sys.path` for the test suite.
+- `test_frigate_s3_archiver.py`, `test_logging_setup.py`, `test_metrics.py`,
+  `test_mp4_tail.py`, `test_config.py` - see *Tests*.
+- `Dockerfile` - two-stage build (`python:3.14-slim`): dependencies into an
+  isolated prefix, then `src/` copied into `/app` and owned by the
+  non-privileged `appuser` the container runs as.
+  `.github/workflows/docker-publish.yml` builds the image for
+  `linux/amd64,linux/arm64,linux/arm/v7` and pushes it to GHCR on pushes to the
+  default branch, on `v*` tags, and on manual dispatch.
+- `compose.yaml` runs the image with a required `env_file`; `compose.debug.yaml`
+  is the same service with `debugpy` listening on 5678.
+- `requirements.in` is the direct dependency list; `requirements.txt` is the
+  pinned lock generated from it with `pip-compile`.
+- `env.example` - the template for the `.env` both compose files require.
+- `LICENSE` - GNU GPL v3.0 (see *Publishing* for why this license and what it
+  obliges downstream users to do).
 
-## Architecture of `frigate_s3_archiver.py`
+## Architecture of `src/frigate_s3_archiver.py`
 
 - `make_frigate_client(base_url, username=None, password=None)` returns a prepared
   `{"base_url", "session"}` pair. Auth is attached only when a username is set, so the
@@ -128,8 +154,12 @@ the private history here contains personal hostnames. See *Publishing* below.
 - Uploads run strictly in chronological order inside a camera pass and stop at the first
   failure (S3 errors and non-200 Frigate responses both propagate) - skipping a bad clip
   would leave a gap the watermark then jumps over.
-- Buffering is unchanged from the prototype: an in-memory bytearray holds at most about
-  2x `part_size` (default 5 MB); anything larger streams through multipart parts.
+- Buffering keeps the prototype's shape: an in-memory bytearray holds at most one
+  `part_size` (default 5 MB) before the first multipart part is flushed, so peak
+  clip memory is about `part_size` plus the separate completeness-tail window
+  (`max(2 * mp4_tail.TAIL_WINDOW_BYTES, http_chunk_size)`, i.e. the larger of
+  512 KiB and the HTTP chunk size, not 2x `part_size`). Anything larger than one
+  part streams through multipart parts.
 - Long blocking calls (`boto3`, the streamed download) run via `asyncio.to_thread` so the
   camera tasks overlap. Interval *detection* stays sequential per camera on purpose: the
   open-interval state machine depends on chunk order.
@@ -142,9 +172,12 @@ the private history here contains personal hostnames. See *Publishing* below.
   Without this the abandoned worker kept downloading from Frigate and writing parts after
   the task was "cancelled" - and `gather` returns immediately, so nothing upstream noticed.
 - Detection logic (`next_after_ts`, `split_interval_for_archive`, `find_motion_intervals`)
-  is behavior-identical to the `2d98c77` prototype: a differential test over 300 seeded
-  random segment sets x 3 chunk configurations x 2 fetch regimes (range-honoring and
-  duplicate-heavy overlap) produced zero output differences. `max_gap_seconds=40` serves
+  came from a local-disk prototype and is unchanged in behavior. The differential test
+  over 300 seeded random segment sets x 3 chunk configurations x 2 fetch regimes
+  (range-honoring and duplicate-heavy overlap) that proved it ran against that
+  prototype, which is not in this repository - so the equivalence it established is a
+  historical fact, not something a run of `pytest` can re-check here. What the suite
+  pins instead is the behavior itself. `max_gap_seconds=40` serves
   both gap roles on purpose: a mid-window gap over 40 s ends the current event and starts
   a new one, and at the window edge the same 40 s marks "too close to be a settled end".
 - Deliberate behavior changes vs the prototype, all in the delivery path: upload/S3/Frigate
@@ -163,8 +196,8 @@ headers, never box contents: it searches backwards from EOF for an
 only when the size lands exactly on EOF. A signature whose size disagrees is a random
 byte match inside media data (or a box cut short), and the search continues to the next
 candidate further back; only after the whole buffer is exhausted is the stream cut off.
-`_upload_clip_hybrid_sync` keeps a rolling tail (the last
-`2 * mp4_tail.TAIL_WINDOW_BYTES`, so the final chunk always contributes a full
+`_upload_clip_hybrid_sync` keeps a rolling tail (`max(2 * mp4_tail.TAIL_WINDOW_BYTES,
+http_chunk_size)`, so the final chunk always contributes a full
 search window) and calls `mp4_tail.stream_is_complete()` at end-of-stream,
 *before* `put_object` / `complete_multipart_upload`: a cut body must never be
 archived as if it were whole, so it raises `metrics.ClipTruncatedError`
@@ -221,6 +254,9 @@ process-global `prometheus_client` registry, and `async_main` binds `METRICS_POR
 - `clips_truncated_uploaded_total{camera}` - clips archived under a `*-truncated.mp4`
   key because every download attempt was cut inside its final box (see
   *Truncated clips*).
+- `clips_unavailable_uploaded_total{camera}` - `*-no-recordings` markers written because
+  every attempt for a window reported it unavailable, so the watermark is not pinned on
+  footage Frigate can no longer export.
 - `frigate_response_seconds{kind="json"}` wraps every Frigate JSON GET;
   `kind="clip_ttfb"` measures time to the first byte of a clip, i.e. Frigate's export
   start, and deliberately excludes the transfer, which is stream-bound.
@@ -229,7 +265,10 @@ process-global `prometheus_client` registry, and `async_main` binds `METRICS_POR
   `s3_<lowercased code>`, because S3 codes are worth alerting on individually and
   cannot be enumerated. Unrecognized errors are `unknown` - never dropped.
 - `camera_restarts_total{camera}`, `camera_consecutive_failures{camera}`,
-  `camera_task_running{camera}` - the alerting surface for the supervisor.
+  `camera_task_running{camera}`, `camera_motion_intervals_found{camera}` - the alerting
+  surface for the supervisor. The last one is a gauge of how many intervals the camera's
+  most recent motion-interval search returned (0 when it found nothing, stale when the
+  search itself failed), so "scanning but idle" reads differently from "not scanning".
   `camera_task_running` is set to 1 by `run_camera` itself, *after* the watermark
   read returns, and to 0 by the supervisor when the task ends. So it is 1 only for
   the states that actually archive (scanning, uploading, the normal idle sleep),
@@ -243,12 +282,17 @@ process-global `prometheus_client` registry, and `async_main` binds `METRICS_POR
 
 ## Remaining gaps
 
-No S3 parameters are read by our code: credentials, region, endpoint and
-addressing style all come from the standard boto3 chain (env vars,
-`~/.aws/credentials`, `~/.aws/config`, `AWS_PROFILE`, `AWS_ENDPOINT_URL_S3`,
-`AWS_S3_ADDRESSING_STYLE`), documented in README.md. `S3_BUCKET` is the only
-S3 variable the script reads itself and has no default - missing it exits with
-an error at startup. The Frigate side is verified end-to-end against
+Our code reads four S3 variables and nothing else: `S3_BUCKET` (no default - missing
+it exits at startup), `S3_PART_SIZE`, `S3_PREFIX` and `S3_KEY_TIMEZONE`. The first
+names where clips go, the other three shape what is written. Credentials, region,
+endpoint and addressing style are not ours at all - they come from the standard boto3
+chain (env vars, `~/.aws/credentials`, `~/.aws/config`, `AWS_PROFILE`,
+`AWS_ENDPOINT_URL_S3`, `AWS_S3_ADDRESSING_STYLE`), documented in README.md. The time
+budget is ours, not the chain's: `make_s3_client` pins `connect_timeout` (5 s),
+`read_timeout` (8 s), `total_max_attempts` (10) and `retry_mode` (`standard`) on the
+botocore config and registers a `needs-retry` hook that logs each retry, so one broken
+S3 cannot hang a camera forever.
+The Frigate side is verified end-to-end against
 your own Frigate deployment. The S3 side is verified against `rclone serve s3` on
 `127.0.0.1:9000` with throwaway test credentials and a local data directory, plus a
 fault-injecting HTTP proxy in front of it.
@@ -274,7 +318,7 @@ in the upload path is `bytes` for that reason; a test pins it.
 
 ## Tests
 
-`python3 -m pytest` - 155 tests, four modules, no mocks of the code under test.
+`python3 -m pytest` - 204 tests, five modules, no mocks of the code under test.
 
 `test_frigate_s3_archiver.py`: a real threaded HTTP server stands in for
 Frigate and a fake S3 client records write order. Covers auth/no-auth clients,
@@ -315,10 +359,18 @@ existed (so an existing bucket keeps resuming), and build/parse round-trip only
 inside one layout, which is what makes a changed `S3_PREFIX` show up as an empty
 watermark lookup rather than a wrong one.
 
-Three plumbing tests in `test_frigate_s3_archiver.py` drive `run_camera` with a
-non-default `max_gap_seconds` and `key_prefix` and assert the values reach the
-requests and the keys - a knob that parses but is not threaded through would
-pass every config test.
+`test_logging_setup.py`: the logging layer - level parsing (the documented
+spellings, `WARN` included, and an invented level refused), a level filtering what
+reaches the stream, `configure_logging` replacing its previous handler rather than
+stacking them, the text line carrying level and camera as fields (and no camera field
+outside a camera context), the camera binding following its own task into worker
+threads, JSON records including a traceback kept inside one field, and the
+third-party DEBUG chatter staying out while the archiver's own lines pass.
+
+Two plumbing tests in `test_frigate_s3_archiver.py` drive `run_camera` with a
+non-default `max_gap_seconds` and a non-default `key_prefix` and assert the values reach
+the requests and the keys - a knob that parses but is not threaded through would pass
+every config test.
 
 Verified live (not in CI): with a real HTTP Frigate double and real rclone S3,
 closing the Frigate listener made both cameras crash and restart, exporting
@@ -330,9 +382,12 @@ camera aimed at a TCP black hole (connections accepted, never answered) reported
 `camera_task_running == 0` for its whole wedged watermark read while the other
 camera archived at `1` - the case the gauge placement in `run_camera` exists for.
 
-The metrics server is stubbed in `test_all_cameras_are_processed_concurrently`:
-`async_main` binds a real port, and the fixed default would collide with a
-previous run of the suite.
+Every test that drives `async_main` keeps the metrics listener off the fixed default
+port - either by stubbing `start_metrics_server` or by setting `METRICS_PORT=0` and
+letting the OS pick an ephemeral port - because `async_main` binds a real port and the
+fixed 9108 default would collide with a previous run of the suite (or a running
+archiver). One test pins the other half of that: the listener is closed on the
+signal-stop path, so it does not outlive the run.
 
 ## Frigate API assumptions (verified against Frigate 0.17 sources)
 
@@ -390,7 +445,12 @@ something under 35 days is the cheapest durability win available.
 
 ## Dependencies
 
-- Python 3.13; see `requirements.txt` (`requests`, `boto3`, `prometheus-client`).
+- Python 3.14; see `requirements.txt` (`requests`, `boto3`,
+  `prometheus-client`). The suite was run green on 3.14.6, and
+  `.github/workflows/test.yml` runs it on 3.14 for every push. `requirements.txt` is a
+  `pip-compile` lock pinned by Python 3.14, which matches the `python:3.14-slim` image;
+  regenerate it from `requirements.in` with that same interpreter so the lock header
+  and the runtime stay in step.
 - Tests additionally need `pytest`.
 - `ffmpeg`/`ffprobe` are installed here (`sudo apt-get update && sudo apt-get
   install -y ffmpeg`); used outside the test suite to confirm a fault-injected
@@ -404,13 +464,56 @@ This tree is meant to be public. Before publishing (or re-publishing) a snapshot
    `git grep -nEI '<your-domain>|<your-git-host>|<camera-name>'` plus a
    search for real credentials. Nothing here should name a live host, camera, or
    bucket; `example.org`-style placeholders are what belongs in docs.
-2. Publish from an **orphan branch** (`github-ready`), not from `master`: the private
-   history of this repository documents behavior against a named personal deployment,
-   so every old blob carries those hostnames even though no credential was ever
-   committed. An orphan commit gives the public repository a clean single-commit
-   history to start from.
-3. Keep `.secrets` git-ignored, and never add it to a commit or to the published
-   branch.
+2. Scan **history**, not just the worktree - a deleted file is still in every older
+   blob. `git grep` with a commit argument walks one tree, so it silently misses
+   this; sweep the objects instead:
+   `git rev-list --all --objects | awk '{print $1}' | sort -u | while read b; do
+   git cat-file -t $b | grep -q blob && git cat-file blob $b | grep -aIl '<pattern>' /dev/stdin; done`.
+   The last full sweep of all 58 blobs in this history found no credential, hostname,
+   camera name or bucket name, so on the content side the history is publishable
+   as-is. Re-run it after any commit that touches `.secrets`-adjacent material.
+3. Commit metadata is published with the repository: five of the twelve commits on
+   `master` carry the owner's personal email in an author or committer field, and the
+   root commit `5b7cd75` carries it in the *committer* field. The owner has decided to
+   keep it, so nothing to do - record it here so nobody re-raises it as a leak, and
+   check the current state with `git log --all --format='%ae %ce' | sort -u` when a
+   new identity is introduced.
+4. `.git/config` holds the remote URL with the Gitea credentials inline. That file is
+   never pushed, but a copied or bundled working tree would carry it - clone fresh
+   for the public push rather than copying the directory.
+5. Keep `.secrets` git-ignored, and never add it to a commit or to the published
+   branch. `.gitignore` covers `.secrets`, `.env`, `*.pem` and `*.key`, and
+   `.dockerignore` lists `.secrets` too, so a broadened `COPY` could not pick it up.
+6. `LICENSE` is GNU GPL v3.0, verbatim from the FSF (sha256
+   `3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986`), chosen because
+   the owner wants commercial use allowed while keeping improvements in the mainline.
+   It is **GPL-3.0-only**, not "or later": Section 14 of the license lets a recipient
+   pick a later version only when the Program says so, and no source file here carries
+   that notice, so the README says "v3.0" without an upgrade path. If a future
+   GPL revision should be usable, the notice has to be added to the files deliberately.
+   What it obliges: anyone distributing a modified version ships the source under the
+   same terms; private and internal use carries no obligation at all. Serving a modified
+   copy over a network does not count as distribution either, so a hosted fork owes
+   nothing back - that is the SaaS gap AGPL-3.0 closes, so switch to AGPL if network
+   hosts must release source. Two things a copyleft license does *not* buy: it does not
+   force anyone to send you their patches (they may publish a fork you cannot read),
+   and without a CLA your project cannot later relicense to, say, MIT, because every
+   contributor keeps their own v3 grant. If contributing back matters, say so in
+   `CONTRIBUTING.md` rather than expecting the license to enforce it.
+   Licensing of the shipped dependencies was checked against their distributions:
+   `requests` Apache-2.0, `boto3` Apache-2.0, `prometheus-client`
+   Apache-2.0 AND BSD-2-Clause, and transitively MIT (`urllib3`, `six`, `jmespath`),
+   BSD (`idna`), Apache-2.0 (`botocore`, `s3transfer`), dual Apache/BSD
+   (`python-dateutil`) and MPL-2.0 (`certifi`) - all GPL-3 compatible, so the image
+   stays distributable. Never paraphrase the license text; reference `LICENSE`.
+   Source files carry no SPDX headers, so authorship travels only through git history
+   and `LICENSE`. Per-file `SPDX-License-Identifier: GPL-3.0-only` headers are the
+   belt-and-braces option if that ever matters.
+7. `.github/workflows/test.yml` runs `pytest` on Python 3.14 for every push and pull
+   request - 3.14 only, because it is the only version the project claims to support
+   and the version the image and the lock use. `docker-publish.yml` builds and pushes
+   the image. A public repository that advertises 204 tests should run them somewhere
+   other than the author's machine.
 
 ## Text conventions
 
