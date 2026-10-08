@@ -472,12 +472,23 @@ This tree is meant to be public. Before publishing (or re-publishing) a snapshot
    The last full sweep of all 58 blobs in this history found no credential, hostname,
    camera name or bucket name, so on the content side the history is publishable
    as-is. Re-run it after any commit that touches `.secrets`-adjacent material.
-3. Commit metadata is published with the repository: five of the twelve commits on
-   `master` carry the owner's personal email in an author or committer field, and the
-   root commit `5b7cd75` carries it in the *committer* field. The owner has decided to
-   keep it, so nothing to do - record it here so nobody re-raises it as a leak, and
-   check the current state with `git log --all --format='%ae %ce' | sort -u` when a
-   new identity is introduced.
+3. Commit metadata is published with the repository, and the owner has decided which
+   identities appear there. All 14 commits on `master` are authored and committed as
+   `Ivan Boykov`, 10 of them as `ivan+gh@boykov.org.ru` and 4 hand-written ones (the
+   root `6280921` and three others) as the older `ivan@boykov.org.ru`. Where the agent
+   actually contributed, credit is carried by the trailer
+   `Co-authored-by: openhands <openhands@all-hands.dev>` rather than by the author
+   field; a commit the owner wrote alone has no trailer and must not gain one. This
+   email attribution is settled - do not re-raise it as a leak and do not invent a new
+   agent author identity. Check the current state with
+   `git log master --format='%ae %ce' | sort -u`.
+   The rewrite that produced this was `git filter-branch` over the whole branch, which
+   changed every SHA and needed a `--force-with-lease` push. Rewriting published
+   metadata for cosmetic reasons breaks other clones and any image builds traceable to
+   old SHAs, so treat it as a one-time correction, not routine cleanup. The old history
+   survives locally under `refs/original/` until pruned; those refs are not on the
+   remote, so remove them once the rewrite is confirmed good, or `git update-ref -d`
+   them individually.
 4. `.git/config` holds the remote URL with the Gitea credentials inline. That file is
    never pushed, but a copied or bundled working tree would carry it - clone fresh
    for the public push rather than copying the directory.
