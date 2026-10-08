@@ -148,8 +148,6 @@ class Config:
     camera_restart_backoff_max_seconds: float
     log_level: int
     log_json: bool
-    log_level: int
-    log_json: bool
 
 
 def load_config(environ=None):
