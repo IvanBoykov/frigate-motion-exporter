@@ -1,4 +1,5 @@
 """Tests for environment configuration and the S3 key prefix."""
+import logging
 import re
 
 import pytest
@@ -19,6 +20,49 @@ def error_variable(**overrides):
     with pytest.raises(ConfigError) as excinfo:
         load(**overrides)
     return str(excinfo.value)
+
+
+def test_log_knobs_default_to_info_and_text():
+    cfg = load()
+    assert cfg.log_level == logging.INFO
+    assert cfg.log_json is False
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("debug", 10),
+        ("INFO", 20),
+        ("warning", 30),
+        ("WARN", 30),
+        ("error", 40),
+        ("critical", 50),
+        ("  Debug  ", 10),
+    ],
+)
+def test_log_level_parses_the_documented_values(value, expected):
+    assert load(LOG_LEVEL=value).log_level == expected
+
+
+def test_log_level_names_the_variable_when_unreadable():
+    message = error_variable(LOG_LEVEL="verbose")
+    assert "LOG_LEVEL" in message
+    assert "verbose" in message
+
+
+@pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
+def test_log_json_accepts_true_spellings(value):
+    assert load(LOG_JSON=value).log_json is True
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off"])
+def test_log_json_accepts_false_spellings(value):
+    assert load(LOG_JSON=value).log_json is False
+
+
+def test_log_json_rejects_a_non_boolean():
+    message = error_variable(LOG_JSON="pretty")
+    assert "LOG_JSON" in message
 
 
 def test_defaults_match_module_constants():

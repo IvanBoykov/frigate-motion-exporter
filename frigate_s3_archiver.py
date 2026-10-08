@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import math
 import os
 import re
@@ -16,8 +17,11 @@ from requests.auth import HTTPBasicAuth
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+import logging_setup
 import metrics
 import mp4_tail
+
+log = logging.getLogger("frigate_s3_archiver")
 
 
 DEFAULT_FRIGATE_URL = "http://localhost:5000"
@@ -280,13 +284,20 @@ async def fetch_cameras_with_retry(
             return await fetch_cameras(frigate_client, timeout=timeout)
         except Exception as exc:
             last_exc = exc
-            print(
-                f"Camera discovery failed "
-                f"({attempt}/{attempts}): {type(exc).__name__}: {exc}",
-                flush=True,
+            log.warning(
+                "Camera discovery failed (%d/%d): %s: %s",
+                attempt,
+                attempts,
+                type(exc).__name__,
+                exc,
             )
             if attempt < attempts:
                 await sleep(retry_seconds)
+    log.error(
+        "Camera discovery failed %d times; giving up. The last error was: %s",
+        attempts,
+        last_exc,
+    )
     raise last_exc
 
 
@@ -507,10 +518,7 @@ async def find_motion_intervals(
                 seg_end = float(seg["end_time"])
                 has_motion = seg.get("motion", 0) >= motion_threshold
             except (KeyError, TypeError, ValueError):
-                print(
-                    f"[WARNING] Skipped malformed segment: "
-                    f"{seg!r}"
-                )
+                log.warning("Skipped malformed segment: %r", seg)
                 continue
 
             # Frigate's range query may return a segment whose range only
@@ -590,6 +598,17 @@ async def find_motion_intervals(
         )
 
     return final_intervals
+
+
+def human_ts(ts, key_timezone):
+    """A unix timestamp as 'YYYY-MM-DD HH:MM:SS TZ', in the key's timezone.
+
+    The same zone the S3 keys render their folders in, so a log line and a
+    key name never show the same moment under two different clocks.
+    """
+    return datetime.fromtimestamp(float(ts), tz=key_timezone).strftime(
+        "%Y-%m-%d %H:%M:%S %Z"
+    )
 
 
 def make_s3_key(
@@ -896,7 +915,7 @@ def _upload_clip_hybrid_sync(
         )
         for closed_key in closed_keys
     ):
-        print(f"[EXISTS] Already uploaded: {s3_key}")
+        log.debug("Already uploaded: %s", s3_key)
         metrics.CLIPS_SKIPPED_TOTAL.labels(camera=camera).inc()
         return False
 
@@ -996,9 +1015,10 @@ def _upload_clip_hybrid_sync(
             metrics.CLIP_BYTES_UPLOADED_TOTAL.labels(camera=camera).inc(
                 total_bytes
             )
-            print(
-                f"[PUT] Uploaded: {s3_key} "
-                f"({total_bytes / 1024 / 1024:.2f} MB)"
+            log.debug(
+                "Uploaded (single PUT): %s (%.2f MB)",
+                s3_key,
+                total_bytes / 1024 / 1024,
             )
             return True
 
@@ -1098,9 +1118,10 @@ def _upload_clip_hybrid_sync(
             metrics.CLIP_BYTES_UPLOADED_TOTAL.labels(camera=camera).inc(
                 total_bytes
             )
-            print(
-                f"[MPU] Uploaded: {s3_key} "
-                f"({total_bytes / 1024 / 1024:.2f} MB)"
+            log.debug(
+                "Uploaded (multipart): %s (%.2f MB)",
+                s3_key,
+                total_bytes / 1024 / 1024,
             )
             return True
 
@@ -1147,7 +1168,7 @@ def _write_unavailable_marker_sync(
         s3_key=marker_key,
         s3_client=s3_client,
     ):
-        print(f"[EXISTS] Already closed by marker: {marker_key}")
+        log.debug("Already closed by marker: %s", marker_key)
         metrics.CLIPS_SKIPPED_TOTAL.labels(camera=camera).inc()
         return False
 
@@ -1157,9 +1178,11 @@ def _write_unavailable_marker_sync(
         Body=b"",
         ContentType="application/x-empty",
     )
-    print(
-        f"[NO RECORDINGS] Window {camera} {start_ts} closed by marker: "
-        f"{marker_key}"
+    log.warning(
+        "Window %s %s has no recordings to archive; closed by marker: %s",
+        camera,
+        start_ts,
+        marker_key,
     )
     return True
 
@@ -1418,15 +1441,14 @@ async def resolve_camera_watermark(
     )
 
     if last_start is not None:
-        print(f"[{camera}] Resuming from timestamp: {last_start}")
+        log.info("Resuming from %s", human_ts(last_start, key_timezone))
         return float(last_start)
 
     start_time = float(now_ts) - float(first_run_lookback_seconds)
-    print(
-        f"[{camera}] No clips found in S3. "
-        f"Starting at {start_time} "
-        f"(the last "
-        f"{int(first_run_lookback_seconds) // 3600} h)."
+    log.info(
+        "No clips found in S3. Starting at %s (the last %d h).",
+        human_ts(start_time, key_timezone),
+        int(first_run_lookback_seconds) // 3600,
     )
     return start_time
 
@@ -1504,15 +1526,12 @@ async def run_camera(
         )
 
         if not intervals:
-            print(
-                f"[{camera}] No intervals. "
-                f"Sleeping {int(idle_sleep_seconds)} s."
-            )
+            log.debug("No intervals. Sleeping %d s.", int(idle_sleep_seconds))
             on_pass_ok()
             await asyncio.sleep(idle_sleep_seconds)
             continue
 
-        print(f"[{camera}] Intervals found: {len(intervals)}")
+        log.info("Intervals found: %d", len(intervals))
 
         uploaded, skipped, last_end_ts, truncated = await upload_intervals(
             intervals=intervals,
@@ -1530,16 +1549,14 @@ async def run_camera(
         )
 
         if truncated:
-            print(
-                f"[{camera}] WARNING: {truncated} clip(s) saved "
-                f"as truncated - Frigate cut the stream "
-                f"{clip_retries + 1} times in a row"
+            log.warning(
+                "%d clip(s) saved as truncated - Frigate cut the stream "
+                "%d times in a row",
+                truncated,
+                clip_retries + 1,
             )
 
-        print(
-            f"[{camera}] Uploaded: {uploaded}, "
-            f"already present: {skipped}"
-        )
+        log.info("Uploaded: %d, already present: %d", uploaded, skipped)
 
         # The whole pass is archived in order, so everything up to its end is
         # in S3. The watermark stays a pure boundary (no margin): the margin
@@ -1639,10 +1656,11 @@ async def supervise_camera(
         delay = camera_restart_delay(
             failures, backoff_seconds, backoff_max_seconds
         )
-        print(
-            f"[{camera}] Task stopped ({outcome}). "
-            f"Restarting in {delay:.0f} s (in a row: {failures})",
-            flush=True,
+        log.warning(
+            "Task stopped (%s). Restarting in %.0f s (in a row: %d)",
+            outcome,
+            delay,
+            failures,
         )
         await sleep(delay)
 
@@ -1657,11 +1675,12 @@ async def async_main(config, now_fn=time.time):
     s3_bucket = cfg.s3_bucket
     key_timezone = cfg.s3_key_timezone
 
+    metrics_bind = metrics.metrics_bind_from_env()
     bound_port = metrics.start_metrics_server(
         port=metrics.metrics_port_from_env(),
-        bind=metrics.metrics_bind_from_env(),
+        bind=metrics_bind,
     )
-    print(f"Metrics: http://:{bound_port}/metrics")
+    log.info("Metrics: http://%s:%d/metrics", metrics_bind, bound_port)
 
     try:
         return await _run_cameras(cfg, s3_bucket, key_timezone, now_fn)
@@ -1677,11 +1696,12 @@ async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
     )
     frigate_client = frigate_client_factory()
     s3_client = make_s3_client()
-    print(
-        f"S3: bucket={s3_bucket} "
-        f"prefix={cfg.s3_prefix or '(none)'} "
-        f"endpoint={s3_client.meta.endpoint_url} "
-        f"region={s3_client.meta.region_name}"
+    log.info(
+        "S3: bucket=%s prefix=%s endpoint=%s region=%s",
+        s3_bucket,
+        cfg.s3_prefix or "(none)",
+        s3_client.meta.endpoint_url,
+        s3_client.meta.region_name,
     )
 
     cameras = await fetch_cameras_with_retry(frigate_client)
@@ -1691,12 +1711,17 @@ async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
     )
 
     if not cameras:
-        print(empty_camera_list_message(discovered, cfg))
-        return
+        log.error("%s", empty_camera_list_message(discovered, cfg))
+        return 1
 
-    print(f"Cameras: {', '.join(cameras)}")
+    log.info("Cameras: %s", ", ".join(cameras))
 
     def start_camera(camera):
+        # Bound before the Task is created: the Task and every worker thread
+        # asyncio later spawns from it inherit the binding, so every line
+        # this camera produces - including uploads logged in to_thread
+        # workers - carries the camera without any call site passing it.
+        logging_setup.bind_camera(camera)
         return asyncio.create_task(
             supervise_camera(
                 camera,
@@ -1784,7 +1809,7 @@ async def run_until_signalled(coro):
     def stop(sig_name):
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.remove_signal_handler(sig)
-        print(f"Received {sig_name}, shutting down...", flush=True)
+        log.info("Received %s, shutting down...", sig_name)
         task.cancel()
 
     handled = []
@@ -1810,8 +1835,12 @@ def main():
     from config import load_config
 
     config = load_config()
+    logging_setup.configure_logging(
+        level=config.log_level,
+        json_format=config.log_json,
+    )
     try:
-        asyncio.run(run_until_signalled(async_main(config=config)))
+        status = asyncio.run(run_until_signalled(async_main(config=config)))
     except asyncio.CancelledError:
         # A signal requested the stop and the cancellation path completed:
         # an expected exit, not an error to report.
@@ -1820,6 +1849,13 @@ def main():
         # A signal that arrived outside the loop (config loading, teardown),
         # where the default handler still applies: also not a crash.
         sys.exit(130)
+    except Exception:
+        # The fatal path: a supervisor bug or an exhausted startup discovery
+        # budget. The traceback stays - as one log record, so it survives
+        # any log pipeline - and the exit code names the failure.
+        log.error("Archiver stopped by an unhandled error.", exc_info=True)
+        sys.exit(1)
+    sys.exit(status or 0)
 
 
 if __name__ == "__main__":

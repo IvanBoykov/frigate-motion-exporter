@@ -16,6 +16,8 @@ import re
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import logging_setup
+
 import frigate_s3_archiver as defaults
 
 
@@ -54,6 +56,31 @@ def _number(environ, name, default, kind=float, minimum=None, maximum=None):
 
 def _seconds(environ, name, default, minimum=0.0):
     return _number(environ, name, default, float, minimum)
+
+
+def _flag(environ, name, default):
+    """A boolean knob: unset means ``default``; a set value must be an
+    accepted spelling of true or false rather than a guess."""
+    raw = _present(environ, name)
+    if raw is None:
+        return default
+    lowered = raw.lower()
+    if lowered in ("1", "true", "yes", "on"):
+        return True
+    if lowered in ("0", "false", "no", "off"):
+        return False
+    raise ConfigError(
+        name,
+        f"expected a boolean (true/false), got {raw!r}",
+    )
+
+
+def _log_level(environ, name, default):
+    raw = _present(environ, name)
+    try:
+        return logging_setup.parse_log_level(raw, default)
+    except ValueError as exc:
+        raise ConfigError(name, str(exc))
 
 
 def _camera_filter(environ, name):
@@ -119,6 +146,10 @@ class Config:
     clip_retry_max_delay_seconds: float
     camera_restart_backoff_seconds: float
     camera_restart_backoff_max_seconds: float
+    log_level: int
+    log_json: bool
+    log_level: int
+    log_json: bool
 
 
 def load_config(environ=None):
@@ -223,4 +254,6 @@ def _load(environ):
         ),
         camera_restart_backoff_seconds=backoff,
         camera_restart_backoff_max_seconds=backoff_max,
+        log_level=_log_level(environ, "LOG_LEVEL", logging_setup.DEFAULT_LOG_LEVEL),
+        log_json=_flag(environ, "LOG_JSON", False),
     )

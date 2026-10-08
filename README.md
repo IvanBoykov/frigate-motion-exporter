@@ -227,6 +227,27 @@ that has not started at all. The first scrape after a restart can therefore
 still show 0 while the camera is healthy but not yet working; the gauge says
 nothing is archived yet, which is true.
 
+### Logging
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive; `WARN` accepted) | `INFO` |
+| `LOG_JSON` | Emit one JSON object per line instead of text | `false` |
+
+Logs go to stderr; stdout stays empty. A text line is
+`date time LEVEL camera message`, where `camera` is empty for startup and
+lifecycle lines. The camera is a separate field, not a prefix inside the
+message: with `LOG_JSON=true` the same line becomes a JSON object with a real
+`camera` key, so a log pipeline filters by camera without parsing text.
+
+INFO is the service-running setting: startup summary, `Intervals found`/
+`Uploaded` per pass, watermark resume, and every anomaly - truncated clips,
+`-no-recordings` markers, malformed segments, supervisor restarts, the fatal
+error with its traceback. DEBUG adds the per-clip S3 keys (`Uploaded (single
+PUT)`/`(multipart)`, `Already uploaded`) and the idle sleep cycles - useful
+for one investigation, too loud to leave on. An unreadable `LOG_LEVEL` fails
+startup naming the variable.
+
 ### S3
 
 The script uses the default `boto3` client chain - the standard AWS credential

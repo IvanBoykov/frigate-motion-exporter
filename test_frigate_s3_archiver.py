@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import logging
 import os
 import signal
 import socket
@@ -8,11 +9,13 @@ import struct
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from zoneinfo import ZoneInfo
 
 import pytest
 import requests
 
 import frigate_s3_archiver as m
+import logging_setup
 import metrics
 from config import load_config
 
@@ -2386,3 +2389,244 @@ def test_second_signal_kills_a_wedged_shutdown():
     finally:
         sender.join(timeout=10)
 
+
+
+def test_a_camera_pass_is_followable_at_info_without_clip_noise(
+    frigate_server, caplog
+):
+    """One archived pass at INFO: what the camera did, but not every key.
+
+    The whole point of levels: docker logs shows intervals found and clips
+    uploaded per pass, while per-clip S3 keys - the spam - stay at DEBUG.
+    """
+    client = make_client(frigate_server)
+    s3 = FakeS3Client()
+    caplog.set_level(logging.DEBUG, logger="frigate_s3_archiver")
+
+    def text_at(level):
+        return " | ".join(
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == level
+            and record.name == "frigate_s3_archiver"
+        )
+
+    with pytest.raises(StopLoop):
+        run(
+            m.run_camera(
+                camera="cam_a",
+                frigate_client=client,
+                s3_bucket="bucket",
+                s3_client=s3,
+                now_fn=ScriptedClock(END_TS, calls=3),
+                **run_camera_options(),
+            )
+        )
+
+    info_text = text_at(logging.INFO)
+    assert "Intervals found: 2" in info_text
+    assert "Uploaded: 2, already present: 0" in info_text
+    assert "No clips found in S3. Starting at 20" in info_text
+
+    debug_text = text_at(logging.DEBUG)
+    assert "Uploaded (single PUT): cam_a/" in debug_text
+    assert "No intervals. Sleeping" in debug_text
+
+    # A healthy pass must not warn: no truncation, no markers, no restarts.
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+def test_start_camera_binds_the_camera_for_its_tasks_lines(
+    frigate_server, monkeypatch
+):
+    """Every line a camera task logs carries its camera, through the JSON
+    formatter's field - not a prefix parsed back out of the message."""
+    _signal_main_env(frigate_server, monkeypatch)
+
+    async def two_cameras(frigate_client, timeout=None):
+        return ["cam_a", "cam_b"]
+
+    async def logging_camera(camera, **kwargs):
+        logging.getLogger("frigate_s3_archiver").info(
+            "pass done by %s", camera
+        )
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(m, "run_camera", logging_camera)
+    monkeypatch.setattr(m, "fetch_cameras", two_cameras)
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = list(root.handlers), root.level
+    stream = io.StringIO()
+    logging_setup.configure_logging(
+        level=logging.DEBUG, json_format=True, stream=stream
+    )
+    try:
+        cfg = load_config()
+
+        async def scenario():
+            run_task = asyncio.create_task(
+                m.async_main(config=cfg, now_fn=lambda: END_TS)
+            )
+            for _ in range(200):
+                if "pass done by cam_b" in stream.getvalue():
+                    break
+                await asyncio.sleep(0.01)
+            run_task.cancel()
+            await asyncio.gather(run_task, return_exceptions=True)
+
+        run(scenario())
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            handler.close()
+        root.handlers[:] = saved_handlers
+        root.setLevel(saved_level)
+        logging_setup._camera_var.set("")
+
+    payloads = [
+        json.loads(line)
+        for line in stream.getvalue().splitlines()
+        if json.loads(line).get("logger") == "frigate_s3_archiver"
+    ]
+    done = [p for p in payloads if p["message"].startswith("pass done by")]
+    assert sorted(p["message"] for p in done) == [
+        "pass done by cam_a",
+        "pass done by cam_b",
+    ]
+    # The field, not the message: each camera tagged its own lines.
+    assert all(p["message"].endswith(p["camera"]) for p in done)
+    assert all("camera" not in p["message"] for p in payloads)
+
+
+def test_human_ts_renders_the_instant_in_the_key_timezone():
+    assert m.human_ts(1700000000, ZoneInfo("UTC")) == (
+        "2023-11-14 22:13:20 UTC"
+    )
+    assert m.human_ts(1700000000, ZoneInfo("Europe/Moscow")) == (
+        "2023-11-15 01:13:20 MSK"
+    )
+
+
+def test_a_watermark_start_reads_as_a_date_not_a_bare_epoch(
+    frigate_server, caplog
+):
+    client = make_client(frigate_server)
+    s3 = FakeS3Client()
+    caplog.set_level(logging.INFO, logger="frigate_s3_archiver")
+
+    with pytest.raises(StopLoop):
+        run(
+            m.run_camera(
+                camera="cam_a",
+                frigate_client=client,
+                s3_bucket="bucket",
+                s3_client=s3,
+                key_timezone=ZoneInfo("UTC"),
+                now_fn=ScriptedClock(END_TS, calls=3),
+                **run_camera_options(),
+            )
+        )
+
+    info_text = " | ".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "frigate_s3_archiver"
+    )
+    assert "Starting at 20" in info_text
+    assert "UTC" in info_text
+    assert str(int(END_TS)) not in info_text
+
+
+def test_main_exits_one_when_the_camera_selection_is_empty(
+    frigate_server, monkeypatch, caplog
+):
+    """A filter that selects nothing means nothing is archived: error, 1."""
+    _signal_main_env(frigate_server, monkeypatch)
+    monkeypatch.setenv("CAMERAS_INCLUDE", "no-such-camera")
+    monkeypatch.setattr(logging_setup, "configure_logging", lambda **kw: None)
+    caplog.set_level(logging.INFO, logger="frigate_s3_archiver")
+
+    with pytest.raises(SystemExit) as exit_info:
+        m.main()
+
+    assert exit_info.value.code == 1
+    errors = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.ERROR
+        and record.name == "frigate_s3_archiver"
+    ]
+    assert len(errors) == 1
+    assert "CAMERAS_INCLUDE" in errors[0].getMessage()
+
+
+def test_main_logs_the_fatal_supervisor_path_as_one_error_record(
+    frigate_server, monkeypatch, caplog
+):
+    """A supervisor bug leaves one ERROR record carrying the traceback."""
+    _signal_main_env(frigate_server, monkeypatch)
+
+    async def broken_supervisor(**kwargs):
+        raise RuntimeError("supervisor bug")
+
+    monkeypatch.setattr(m, "supervise_camera", broken_supervisor)
+    monkeypatch.setattr(logging_setup, "configure_logging", lambda **kw: None)
+    caplog.set_level(logging.INFO, logger="frigate_s3_archiver")
+
+    with pytest.raises(SystemExit) as exit_info:
+        m.main()
+
+    assert exit_info.value.code == 1
+    errors = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.ERROR
+        and record.name == "frigate_s3_archiver"
+    ]
+    assert [r.getMessage() for r in errors] == [
+        "Archiver stopped by an unhandled error."
+    ]
+    assert errors[0].exc_info is not None
+
+
+def test_main_exits_one_when_startup_discovery_gives_up(
+    frigate_server, monkeypatch, caplog
+):
+    """The retry warnings, the giving-up error, exit 1 - in that order."""
+    monkeypatch.setenv("FRIGATE_URL", frigate_server)
+    monkeypatch.setenv("S3_BUCKET", "bucket")
+    monkeypatch.setenv("FRIGATE_USER", "")
+    monkeypatch.setenv("FRIGATE_PASSWORD", "")
+    monkeypatch.setattr(m.boto3, "client", lambda name, **kw: FakeS3Client())
+    monkeypatch.setattr(
+        m.metrics, "start_metrics_server", lambda port, bind=None: port
+    )
+
+    async def always_down(frigate_client, timeout=None):
+        raise ConnectionError("frigate is down")
+
+    real_discovery = m.fetch_cameras_with_retry
+
+    async def fast_discovery(frigate_client):
+        return await real_discovery(
+            frigate_client, attempts=2, retry_seconds=0.01
+        )
+
+    monkeypatch.setattr(m, "fetch_cameras", always_down)
+    monkeypatch.setattr(m, "fetch_cameras_with_retry", fast_discovery)
+    monkeypatch.setattr(logging_setup, "configure_logging", lambda **kw: None)
+    caplog.set_level(logging.INFO, logger="frigate_s3_archiver")
+
+    with pytest.raises(SystemExit) as exit_info:
+        m.main()
+
+    assert exit_info.value.code == 1
+    text = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "frigate_s3_archiver"
+    ]
+    assert "Camera discovery failed (1/2): ConnectionError: frigate is down" in text
+    assert "Camera discovery failed 2 times; giving up" in text[-2]
+    assert text[-1] == "Archiver stopped by an unhandled error."
