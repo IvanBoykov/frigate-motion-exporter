@@ -19,11 +19,11 @@ WORKDIR /app
 # который уже находится в PATH и PYTHONPATH базового образа.
 COPY --from=deps /install /usr/local
 ENV PYTHONUNBUFFERED=1
-# Копируем исходный код проекта
-COPY . .
-
 # Создаем непривилегированного пользователя для безопасности
-RUN useradd -m -r appuser && chown -R appuser:appuser /app
+RUN useradd -m -r appuser
+# Копируем исходный код проекта
+COPY --chown=appuser:appuser src/ ./
+
 USER appuser
 
 # Точка входа
