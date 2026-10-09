@@ -1,16 +1,21 @@
-FROM python:3.14-slim AS deps
+ARG BASE_IMAGE=python:3.14-slim
 
-WORKDIR /build
+FROM ${BASE_IMAGE} AS deps
 
 # Copy only the dependency file so the Docker layer cache is reusable.
 COPY requirements.txt .
-
 # Install dependencies into an isolated prefix.
-# --no-cache-dir keeps the layer smaller.
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+ENV PIP_NO_CACHE_DIR=1 \
+      PIP_NO_COMPILE=1 \
+      PIP_DISABLE_PIP_VERSION_CHECK=1 \
+      PYTHONDONTWRITEBYTECODE=1 \
+      PYTHONHASHSEED=0 \
+      LC_ALL=C
+
+RUN pip install --no-cache-dir --require-hashes --no-compile --prefix=/install -r requirements.txt
 
 # Final stage (runtime)
-FROM python:3.14-slim
+FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
@@ -22,10 +27,11 @@ ENV PYTHONUNBUFFERED=1
 # Run as an unprivileged user.
 RUN useradd -m -r appuser
 # Copy the application code; src/ becomes the working directory, so the
-# entrypoint runs frigate_s3_archiver.py as a top-level module.
+# docker runs frigate_s3_archiver.py as a top-level module.
 COPY --chown=appuser:appuser src/ ./
 
 USER appuser
 
-# Entrypoint
-ENTRYPOINT ["python", "frigate_s3_archiver.py"]
+# Command
+CMD ["python", "frigate_s3_archiver.py"]
+EXPOSE 9108

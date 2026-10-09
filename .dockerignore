@@ -1,30 +1,6 @@
-**/__pycache__
-**/.venv
-**/.classpath
-**/.dockerignore
-**/.env
-.secrets
-**/.secrets
-**/.git
-**/.gitignore
-**/.project
-**/.settings
-**/.toolstarget
-**/.vs
-**/.vscode
-**/*.*proj.user
-**/*.dbmdl
-**/*.jfm
-**/bin
-**/charts
-**/docker-compose*
-**/compose*
-**/Dockerfile*
-**/node_modules
-**/npm-debug.log
-**/obj
-**/secrets.dev.yaml
-**/values.dev.yaml
-LICENSE
-README.md
-*.md
+# Игнорируем абсолютно всё в контексте сборки
+**
+
+# Исключаем (добавляем обратно) только то, что необходимо для сборки
+!src/**
+!requirements.txt
