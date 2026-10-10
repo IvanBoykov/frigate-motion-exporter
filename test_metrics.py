@@ -13,15 +13,23 @@ import frigate_s3_archiver as m
 import metrics
 from test_frigate_s3_archiver import (
     BASE_TS,
+    END_TS,
     SEGMENT_SECONDS,
     FakeFrigateHandler,
+    FakeS3Client,
+    ScriptedClock,
+    StopLoop,
     make_segments,
+    run_camera_options,
 )
 
 
 @pytest.fixture()
 def frigate_server():
-    FakeFrigateHandler.segments_by_camera = {"metric_cam": make_segments([1, 1, 1])}
+    FakeFrigateHandler.segments_by_camera = {
+        "metric_cam": make_segments([1, 1, 1]),
+        "watermark_cam": make_segments([1, 1, 1]),
+    }
     FakeFrigateHandler.clip_failures = set()
     FakeFrigateHandler.requested_clips = []
     FakeFrigateHandler.clip_attempts = []
@@ -189,6 +197,7 @@ def test_metrics_endpoint_serves_prometheus_text():
         "errors_total",
         "camera_restarts_total",
         "camera_task_running",
+        "camera_watermark_timestamp_seconds",
     ):
         assert f"# TYPE {name}" in body
 
@@ -354,6 +363,11 @@ def test_task_running_is_1_only_after_the_watermark_resolves(frigate_server):
         await asyncio.sleep(0.05)
         assert s3.entered.wait(5), "the watermark lookup never started"
         wedged = observed("camera_task_running", camera=camera)
+        # A watermark the task never got is not a watermark: no series is
+        # exported at all, rather than a series reporting the first-run guess.
+        wedged_watermark = REGISTRY.get_sample_value(
+            "camera_watermark_timestamp_seconds", {"camera": camera}
+        )
 
         s3.release.set()
         working = 0
@@ -365,13 +379,73 @@ def test_task_running_is_1_only_after_the_watermark_resolves(frigate_server):
 
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        return wedged, working
+        return wedged, wedged_watermark, working
 
-    wedged, working = run(scenario())
+    wedged, wedged_watermark, working = run(scenario())
 
     assert wedged == 0
+    assert wedged_watermark is None
     assert working == 1
     assert sample("camera_task_running", camera=camera) == 0
+
+
+def test_watermark_gauge_holds_the_boundary_the_camera_resumed_from(
+    frigate_server, monkeypatch
+):
+    """Before the first pass archives anything, the gauge holds the resume point."""
+    camera = "watermark_cam"
+    client = m.make_frigate_client(frigate_server, username="", password="")
+    s3 = FakeS3Client()
+    seen = []
+    real_find_motion_intervals = m.find_motion_intervals
+
+    async def spy_find_motion_intervals(**kwargs):
+        seen.append(sample("camera_watermark_timestamp_seconds", camera=camera))
+        return await real_find_motion_intervals(**kwargs)
+
+    monkeypatch.setattr(m, "find_motion_intervals", spy_find_motion_intervals)
+
+    with pytest.raises(StopLoop):
+        run(
+            m.run_camera(
+                camera=camera,
+                frigate_client=client,
+                s3_bucket="bucket",
+                s3_client=s3,
+                now_fn=ScriptedClock(END_TS, calls=3),
+                **run_camera_options(),
+            )
+        )
+
+    # Pass 1 runs with the resume boundary in place: an empty bucket puts it at
+    # now - first_run_lookback_seconds. Pass 2 sees the boundary the first pass
+    # advanced to, before it found anything of its own.
+    assert seen == [BASE_TS, BASE_TS + 3 * SEGMENT_SECONDS]
+
+
+def test_watermark_gauge_holds_its_value_through_an_idle_pass(frigate_server):
+    """A pass that archives nothing leaves the boundary where the last one left it."""
+    camera = "watermark_cam"
+    client = m.make_frigate_client(frigate_server, username="", password="")
+    s3 = FakeS3Client()
+
+    with pytest.raises(StopLoop):
+        run(
+            m.run_camera(
+                camera=camera,
+                frigate_client=client,
+                s3_bucket="bucket",
+                s3_client=s3,
+                now_fn=ScriptedClock(END_TS, calls=3),
+                **run_camera_options(),
+            )
+        )
+
+    # Pass 1 archived the three motion segments, so the boundary is their end.
+    # Pass 2 found nothing, and an idle pass must not move or zero that.
+    assert sample("camera_watermark_timestamp_seconds", camera=camera) == (
+        BASE_TS + 3 * SEGMENT_SECONDS
+    )
 
 
 def test_the_supervisor_keeps_the_gauge_0_during_backoff():

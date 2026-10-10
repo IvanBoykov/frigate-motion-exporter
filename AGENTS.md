@@ -294,6 +294,14 @@ process-global `prometheus_client` registry, and `async_main` binds `METRICS_POR
   request. Consequence: the first scrape after a restart may show 0 for a healthy
   camera; that is the honest reading, and `camera_restarts_total` distinguishes it
   from a stalled one.
+- `camera_watermark_timestamp_seconds{camera}` - the watermark the task actually
+  holds, i.e. how far the archive reaches. Set by `run_camera` next to
+  `camera_task_running`, once the watermark read returns, and again after each pass
+  that stored a clip. So it is absent for a task wedged on the watermark read -
+  deliberately, because a first-run guess is not a watermark - and flat for a camera
+  that simply has no new motion. It is the only metric that reads archive depth
+  rather than process health: a camera that stopped advancing is invisible in every
+  counter (no errors, no restarts, no uploads).
 
 ## Remaining gaps
 
@@ -354,11 +362,13 @@ re-fetching it every pass.
 
 `test_metrics.py`: error-kind classification (including `__cause__` chains and a
 cause cycle), the exporter's HTTP output, latency observations against the real
-HTTP Frigate double, and the supervisor: restart counts, exponential backoff, the
-backoff reset by a healthy pass, a task that returns counting as a failure,
-cancel propagating to the camera task, and one broken camera not stopping
-another. Camera labels are unique per test because the registry is
-process-global.
+HTTP Frigate double, the watermark gauge (absent while wedged on the watermark
+read, holding the resume boundary before the first pass, advancing to the end of
+the footage a pass stored, unchanged across an idle pass), and the supervisor:
+restart counts, exponential backoff, the backoff reset by a healthy pass, a task
+that returns counting as a failure, cancel propagating to the camera task, and
+one broken camera not stopping another. Camera labels are unique per test because
+the registry is process-global.
 
 `test_mp4_tail.py`: the last-box-at-EOF detector - synthetic byte-exact layouts of
 all four final-box shapes (mfra, moov, trailing mdat, 64-bit size), cuts at every byte

@@ -1588,6 +1588,11 @@ async def run_camera(
     # Set here rather than by the supervisor: a task wedged in the watermark
     # lookup has not started working, and must not report itself as working.
     metrics.CAMERA_TASK_RUNNING.labels(camera=camera).set(1)
+    # Same reason as above: the gauge reports a watermark the task actually
+    # holds, so on a first run it appears only after the listing returned.
+    metrics.CAMERA_WATERMARK_TIMESTAMP_SECONDS.labels(camera=camera).set(
+        watermark
+    )
 
     while True:
         now_ts = int(now_fn())
@@ -1656,6 +1661,9 @@ async def run_camera(
         # in S3. The watermark stays a pure boundary (no margin): the margin
         # is added per query in after_ts only.
         watermark = last_end_ts
+        metrics.CAMERA_WATERMARK_TIMESTAMP_SECONDS.labels(camera=camera).set(
+            watermark
+        )
         on_pass_ok()
 
 
