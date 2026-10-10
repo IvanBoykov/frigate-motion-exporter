@@ -24,9 +24,8 @@ committed here is public.
 lives in `.secrets` as `GIT_REPO_URL` - never write it into a tracked file.
 
 That URL must be used **without** a trailing `.git`: with the suffix this Gitea answers
-`repository not found`. The default branch is `master`. The public mirror on GitHub is
-published from the `github-ready` branch, which carries a single history-free commit -
-the private history here contains personal hostnames. See *Publishing* below.
+`repository not found`. The default branch is `master`. See *Publishing* below for what
+a public snapshot has to satisfy.
 
 ## Frigate API notes
 
@@ -62,8 +61,8 @@ do not "harmonize" them. `frigate_s3_archiver` names what it does and where it w
 which keeps room for a sibling with a different destination (`frigate_localdir_archiver`);
 `frigate-motion-exporter` names the job for the operator. Renaming the module would trade
 a meaningful name for a cosmetic match and break the image entrypoint, which runs it by
-filename (`Dockerfile:31`). README and this file reference the module and test names by
-path throughout, so treat them all as load-bearing.
+filename (the `CMD` in `Dockerfile`). README and this file reference the module and test
+names by path throughout, so treat them all as load-bearing.
 
 - `src/frigate_s3_archiver.py` - the archiver: motion-interval
   detection plus streaming each clip straight into S3 with multipart upload and
@@ -101,7 +100,15 @@ path throughout, so treat them all as load-bearing.
 - `compose.yaml` runs the image with a required `env_file`; `compose.debug.yaml`
   is the same service with `debugpy` listening on 5678.
 - `requirements.in` is the direct dependency list; `requirements.txt` is the
-  pinned lock generated from it with `pip-compile`.
+  hash-pinned lock generated from it with `pip-compile`.
+- `requirements.dev.in` / `requirements.dev.txt` are the same pair for test-only
+  dependencies (`pytest`). CI installs both locks; `Dockerfile` installs
+  `requirements.txt` alone with `--require-hashes`, so the test dependency must
+  never move into `requirements.in`.
+- `.github/workflows/test.yml` installs both locks and runs `pytest` on Python 3.14
+  for every push and pull request.
+- `.github/dependabot.yml` opens weekly update PRs for the pip, Docker and
+  GitHub Actions dependencies.
 - `env.example` - the template for the `.env` both compose files require.
 - `LICENSE` - GNU GPL v3.0 (see *Publishing* for why this license and what it
   obliges downstream users to do).
@@ -326,7 +333,9 @@ in the upload path is `bytes` for that reason; a test pins it.
 
 ## Tests
 
-`python3 -m pytest` - 204 tests, five modules, no mocks of the code under test.
+`python3 -m pytest` - five modules, no mocks of the code under test. Seven cases in
+`test_mp4_tail.py` transcode with a real `ffmpeg` and skip when it is absent, so a run
+on a machine without ffmpeg ends in skips rather than failures; that is a green run.
 
 `test_frigate_s3_archiver.py`: a real threaded HTTP server stands in for
 Frigate and a fake S3 client records write order. Covers auth/no-auth clients,
@@ -454,12 +463,16 @@ something under 35 days is the cheapest durability win available.
 ## Dependencies
 
 - Python 3.14; see `requirements.txt` (`requests`, `boto3`,
-  `prometheus-client`). The suite was run green on 3.14.6, and
-  `.github/workflows/test.yml` runs it on 3.14 for every push. `requirements.txt` is a
-  `pip-compile` lock pinned by Python 3.14, which matches the `python:3.14-slim` image;
-  regenerate it from `requirements.in` with that same interpreter so the lock header
-  and the runtime stay in step.
-- Tests additionally need `pytest`.
+  `prometheus-client`). `.github/workflows/test.yml` runs the suite on 3.14 for every
+  push. `requirements.txt` is a `pip-compile` lock pinned by Python 3.14, which matches
+  the `python:3.14-slim` image; regenerate it from `requirements.in` with that same
+  interpreter so the lock header and the runtime stay in step.
+- Tests additionally need `pytest`, pinned by its own pair: `requirements.dev.in`
+  and the hash-pinned `requirements.dev.txt`. Regenerate that lock the same way
+  (`pip-compile --generate-hashes requirements.dev.in`) and with the same interpreter
+  as the runtime lock. CI installs both locks; the image installs `requirements.txt`
+  alone with `--require-hashes`, so `pytest` must stay out of `requirements.in` -
+  a test-only dependency does not belong in the published image.
 - `ffmpeg`/`ffprobe` are installed here (`sudo apt-get update && sudo apt-get
   install -y ffmpeg`); used outside the test suite to confirm a fault-injected
   upload still stores a playable clip.
@@ -477,32 +490,28 @@ This tree is meant to be public. Before publishing (or re-publishing) a snapshot
    this; sweep the objects instead:
    `git rev-list --all --objects | awk '{print $1}' | sort -u | while read b; do
    git cat-file -t $b | grep -q blob && git cat-file blob $b | grep -aIl '<pattern>' /dev/stdin; done`.
-   The last full sweep of all 58 blobs in this history found no credential, hostname,
-   camera name or bucket name, so on the content side the history is publishable
-   as-is. Re-run it after any commit that touches `.secrets`-adjacent material.
+   Re-run it after any commit that touches `.secrets`-adjacent material.
 3. Commit metadata is published with the repository, and the owner has decided which
-   identities appear there. All 14 commits on `master` are authored and committed as
-   `Ivan Boykov`, 10 of them as `ivan+gh@boykov.org.ru` and 4 hand-written ones (the
-   root `6280921` and three others) as the older `ivan@boykov.org.ru`. Where the agent
-   actually contributed, credit is carried by the trailer
-   `Co-authored-by: openhands <openhands@all-hands.dev>` rather than by the author
-   field; a commit the owner wrote alone has no trailer and must not gain one. This
-   email attribution is settled - do not re-raise it as a leak and do not invent a new
-   agent author identity. Check the current state with
+   identities appear there. Every commit is authored and committed as `Ivan Boykov`,
+   under `ivan+gh@boykov.org.ru` where the agent contributed and under the older
+   `ivan@boykov.org.ru` where the owner wrote it alone. Where the agent contributed,
+   credit is carried by the trailer `Co-authored-by: openhands <openhands@all-hands.dev>`
+   rather than by the author field; a commit the owner wrote alone has no trailer and
+   must not gain one. This email attribution is settled - do not re-raise it as a leak
+   and do not invent a new agent author identity. Check the current state with
    `git log master --format='%ae %ce' | sort -u`.
-   The rewrite that produced this was `git filter-branch` over the whole branch, which
+   Metadata was once rewritten across the whole branch with `git filter-branch`, which
    changed every SHA and needed a `--force-with-lease` push. Rewriting published
    metadata for cosmetic reasons breaks other clones and any image builds traceable to
-   old SHAs, so treat it as a one-time correction, not routine cleanup. The old history
-   survives locally under `refs/original/` until pruned; those refs are not on the
-   remote, so remove them once the rewrite is confirmed good, or `git update-ref -d`
-   them individually.
+   old SHAs, so treat it as a one-time correction, not routine cleanup.
 4. `.git/config` holds the remote URL with the Gitea credentials inline. That file is
    never pushed, but a copied or bundled working tree would carry it - clone fresh
    for the public push rather than copying the directory.
 5. Keep `.secrets` git-ignored, and never add it to a commit or to the published
-   branch. `.gitignore` covers `.secrets`, `.env`, `*.pem` and `*.key`, and
-   `.dockerignore` lists `.secrets` too, so a broadened `COPY` could not pick it up.
+   branch. `.gitignore` covers `.secrets`, `.env` and `*.env` (it carries no `*.pem`
+   or `*.key` entry - add one before putting a key file in the tree), and
+   `.dockerignore` ignores `**` and re-includes only `src/**` and `requirements.txt`,
+   so a broadened `COPY` still cannot pick `.secrets` up.
 6. `LICENSE` is GNU GPL v3.0, verbatim from the FSF (sha256
    `3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986`), chosen because
    the owner wants commercial use allowed while keeping improvements in the mainline.
@@ -530,8 +539,8 @@ This tree is meant to be public. Before publishing (or re-publishing) a snapshot
    belt-and-braces option if that ever matters.
 7. `.github/workflows/test.yml` runs `pytest` on Python 3.14 for every push and pull
    request - 3.14 only, because it is the only version the project claims to support
-   and the version the image and the lock use. `docker-publish.yml` builds and pushes
-   the image. A public repository that advertises 204 tests should run them somewhere
+   and the version the image and the locks use. `docker-publish.yml` builds and pushes
+   the image. A public repository that advertises a test suite should run it somewhere
    other than the author's machine.
 
 ## Text conventions

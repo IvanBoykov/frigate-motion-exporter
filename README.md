@@ -55,7 +55,9 @@ gracefully: camera tasks are cancelled at their current await point, the
 metrics listener closes, and the process exits 0 without a traceback. A
 second signal kills a wedged shutdown outright.
 
-Tests: `pip install pytest && python3 -m pytest`
+Tests: `pip install -r requirements.txt -r requirements.dev.txt && python3 -m pytest`
+(the `test_mp4_tail.py` cases that transcode with real `ffmpeg` skip when it is not
+installed, so a run on a machine without ffmpeg ends in skips, not failures).
 
 ## Naming
 
