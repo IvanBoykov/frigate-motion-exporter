@@ -1,6 +1,7 @@
-# Игнорируем абсолютно всё в контексте сборки
+# Ignore absolutely everything in the build context.
+
 **
 
-# Исключаем (добавляем обратно) только то, что необходимо для сборки
+# Re-include only what the build needs.
 !src/**
 !requirements.txt
