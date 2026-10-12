@@ -1331,6 +1331,144 @@ def test_multipart_cancellation_stops_at_the_part_boundary(frigate_server):
     assert s3.completed == []
 
 
+def _position_tagged_clip(total_bytes, chunk_size, mfra=b""):
+    """Clip bytes where every chunk is distinct, so any reordering, gap,
+    overlap or off-by-one on a part boundary changes the reassembled body."""
+    out = bytearray()
+    index = 0
+    while len(out) < total_bytes:
+        want = min(chunk_size, total_bytes - len(out))
+        tag = index.to_bytes(8, "little")
+        out += (tag * (want // 8 + 1))[:want]
+        index += 1
+    return bytes(out[:total_bytes] + mfra)
+
+
+def test_multipart_parts_reassemble_the_clip_without_duplication():
+    """Every byte reaches S3 exactly once, in order, and no part is buffered twice.
+
+    The fake S3 used elsewhere records only ``len(Body)``, which cannot tell a
+    correct part from one that repeats or skips bytes -- the exact bug class an
+    off-by-one around ``del buffer[:part_size]`` introduces, and the reason the
+    upload path is allowed to hand ``upload_part`` a mutable ``bytearray``.
+    The parts are also asserted to arrive as they are sent, one at a time,
+    which is the buffering bound the memory comment in the uploader claims.
+    """
+    part_size = 5 * 1024 * 1024
+    chunk_size = 1024 * 1024
+    mfra = struct.pack(">I4s", 16, b"mfra") + b"\0" * 8
+    clip = _position_tagged_clip(12 * 1024 * 1024, chunk_size, mfra)
+    stream = [clip[i:i + chunk_size] for i in range(0, len(clip), chunk_size)]
+
+    received = []
+
+    class AssemblingS3(FakeS3Client):
+        def upload_part(self, Bucket, Key, UploadId, PartNumber, Body):
+            # a snapshot, because a bytearray body is about to be mutated
+            received.append((PartNumber, bytes(Body)))
+            return super().upload_part(
+                Bucket, Key, UploadId, PartNumber, Body
+            )
+
+    s3 = AssemblingS3()
+
+    class StreamingResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size=None):
+            return iter(stream)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class StreamingSession:
+        def get(self, url, stream=False, timeout=None):
+            return StreamingResponse()
+
+    m._upload_clip_hybrid_sync(
+        camera="cam_a",
+        start_ts=float(BASE_TS),
+        end_ts=float(BASE_TS + 10 * SEGMENT_SECONDS),
+        frigate_client={"session": StreamingSession(), "base_url": "http://fake"},
+        s3_bucket="bucket",
+        s3_client=s3,
+        key_timezone=m.DEFAULT_S3_KEY_TIMEZONE,
+        part_size=part_size,
+        http_chunk_size=chunk_size,
+        http_timeout=30,
+    )
+
+    expected_parts = [
+        clip[i:i + part_size] for i in range(0, len(clip), part_size)
+    ]
+    assert [n for n, _ in received] == list(
+        range(1, len(expected_parts) + 1)
+    ), "parts must reach S3 in chronological order"
+    assert [body for _, body in received] == expected_parts, (
+        "the concatenation of the uploaded parts must be the clip, "
+        "byte for byte"
+    )
+    assert b"".join(body for _, body in received) == clip
+    assert s3.completed and not s3.aborted
+
+
+def test_single_put_sends_the_whole_clip(frigate_server):
+    """A clip under one part goes out as a single PUT with its exact bytes."""
+    part_size = 5 * 1024 * 1024
+    mfra = struct.pack(">I4s", 16, b"mfra") + b"\0" * 8
+    clip = _position_tagged_clip(2 * 1024 * 1024, 256 * 1024, mfra)
+    stream = [clip[i:i + 256 * 1024] for i in range(0, len(clip), 256 * 1024)]
+
+    bodies = []
+
+    class RecordingS3(FakeS3Client):
+        def put_object(self, Bucket, Key, Body, ContentType):
+            bodies.append(bytes(Body))
+            super().put_object(Bucket, Key, Body, ContentType)
+
+    s3 = RecordingS3()
+
+    class StreamingResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size=None):
+            return iter(stream)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class StreamingSession:
+        def get(self, url, stream=False, timeout=None):
+            return StreamingResponse()
+
+    m._upload_clip_hybrid_sync(
+        camera="cam_a",
+        start_ts=float(BASE_TS),
+        end_ts=float(BASE_TS + 2 * SEGMENT_SECONDS),
+        frigate_client={"session": StreamingSession(), "base_url": "http://fake"},
+        s3_bucket="bucket",
+        s3_client=s3,
+        key_timezone=m.DEFAULT_S3_KEY_TIMEZONE,
+        part_size=part_size,
+        http_chunk_size=256 * 1024,
+        http_timeout=30,
+    )
+
+    assert bodies == [clip]
+
+
 def test_cancelling_an_upload_stops_the_worker_thread(frigate_server):
     """The physical S3 work must stop when the task is cancelled.
 

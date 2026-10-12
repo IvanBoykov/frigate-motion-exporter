@@ -169,12 +169,23 @@ names by path throughout, so treat them all as load-bearing.
 - Uploads run strictly in chronological order inside a camera pass and stop at the first
   failure (S3 errors and non-200 Frigate responses both propagate) - skipping a bad clip
   would leave a gap the watermark then jumps over.
-- Buffering keeps the prototype's shape: an in-memory bytearray holds at most one
-  `part_size` (default 5 MB) before the first multipart part is flushed, so peak
-  clip memory is about `part_size` plus the separate completeness-tail window
-  (`max(2 * mp4_tail.TAIL_WINDOW_BYTES, http_chunk_size)`, i.e. the larger of
-  512 KiB and the HTTP chunk size, not 2x `part_size`). Anything larger than one
-  part streams through multipart parts.
+- Buffering keeps the prototype's shape: one in-memory bytearray holds the carry from
+  the last flushed part plus the chunks that arrived since (< `part_size` + one HTTP
+  chunk), and a second object holds the completeness-tail window
+  (`max(2 * mp4_tail.TAIL_WINDOW_BYTES, http_chunk_size)`). Handing a part to boto3
+  costs exactly one copy: boto3 rejects a `memoryview` for `Body` and sends a
+  `bytearray` by value, so a part is passed as `buffer[:part_size]` - wrapping it in
+  `bytes()` would allocate a second full copy of every part, which measured as the
+  single largest allocation in a clip upload. That one copy must be dropped the
+  moment `upload_part` returns (`del part_data`): the slice assignment allocates the
+  next part *before* the name drops the previous one, so without the `del` every
+  part transition held two part copies live - measured, not inferred (tracemalloc
+  live peak of one upload, and 11-16 % of peak RSS in the full pipeline at flat
+  CPU). A `memoryview` cannot replace the copy either: holding a view blocks the
+  `del buffer[:part_size]` compaction with `BufferError` even for non-overlapping
+  regions. Peak clip memory per active producer is
+  therefore ~(part_size + chunk) buffer + part_size copy + tail window. Anything larger
+  than one part streams through multipart parts.
 - Long blocking calls (`boto3`, the streamed download) run via `asyncio.to_thread` so the
   camera tasks overlap. Interval *detection* stays sequential per camera on purpose: the
   open-interval state machine depends on chunk order.
@@ -302,6 +313,38 @@ process-global `prometheus_client` registry, and `async_main` binds `METRICS_POR
   that simply has no new motion. It is the only metric that reads archive depth
   rather than process health: a camera that stopped advancing is invisible in every
   counter (no errors, no restarts, no uploads).
+
+## Memory measurement invariants
+
+Resident-memory numbers for this exporter are only comparable under these
+conditions (the harness lives in `misc/mem-usage/` and runs the full pipeline
+against a fake Frigate and a fake S3 in a *separate* process): the fake Frigate must serve
+an `/api/config` built from the requested camera count - a fixed config silently
+runs two cameras no matter what the run is labelled; the fake S3 must stream
+request bodies into an incremental digest instead of buffering them, since its
+heap is charged to the measured RSS; the fakes must not share the measured
+process - an in-process fake charges its payload generation and body hashing to
+the archiver's RSS *and* shares its per-process `MALLOC_*` environment, so an
+allocator setting under test reprices the meter too (that is how the trim
+threshold's CPU cost got overstated by ~30 %); overlap must be counted, not assumed -
+concurrent uploads tracked from the first part to Complete are the only proof
+that an "N camera" measurement had N uploads in flight; and CPU across
+configurations is comparable only at a fixed upload volume (end runs on a clip
+count, not a clock) - a fixed-time series makes the trimmed configuration look
+like it archived cheaper while it simply archived less. And every row must record
+the allocator environment its child actually received: three rows in the first
+matrix were labelled with variables that were never passed and read as
+measurements while they were duplicates of `default`, which is what first made
+the arena count look irrelevant. Peak RSS scales linearly with cameras up to the
+`asyncio.to_thread` pool ceiling (`min(32, cpu_count + 4)`; only Python 3.13+
+sizes it from the process *affinity* instead of the machine, so on older
+interpreters a cpuset does not shrink it), ~17 MiB per camera at image defaults,
+~8-9 MiB with `MALLOC_ARENA_MAX=1`, and is flat in clip size; the trim threshold
+costs ~1.9-2.0x CPU in system time and ~1.8-2.1x wall time - and the whole cost
+is the dynamic mmap threshold it pins, since re-raising
+`MALLOC_MMAP_THRESHOLD_` above `S3_PART_SIZE` next to it returns CPU to default;
+the arena cap costs nothing measurable and improved CPU and wall time in every
+run.
 
 ## Remaining gaps
 

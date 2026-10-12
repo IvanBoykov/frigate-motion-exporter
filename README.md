@@ -148,6 +148,11 @@ Out of scope by design:
 All configuration is via environment variables; the script has no config file of
 its own.
 
+Two optional variables outside this file's list reduce the process's memory:
+setting `MALLOC_ARENA_MAX=1` cuts peak RSS 17-37 % at no measurable CPU cost,
+and `MALLOC_MMAP_THRESHOLD_`/`MALLOC_TRIM_THRESHOLD_` trade further reductions
+for CPU - see [Memory and resource sizing](#memory-and-resource-sizing).
+
 ### Frigate
 
 | Variable | Meaning | Default |
@@ -412,6 +417,73 @@ point for a camera whose bucket prefix is empty. Because the fallback replaces a
 lookback that failed rather than one that found a recent clip, downtime longer
 than the first window costs re-scanning, not coverage; downtime longer than the
 second costs footage.
+
+### Memory and resource sizing
+
+Memory is bounded by the upload path, not by clip length: a clip is streamed and
+cut into multipart parts, so a longer clip costs more time, never more memory.
+While one camera uploads, the process holds one part-sized buffer, one copy of a
+part handed to the S3 SDK (the SDK rejects a `memoryview` and sends a
+`bytearray` by value, so this copy is irreducible), and the fixed MP4
+completeness tail window:
+
+```
+per uploading camera ~= 2 x PART_SIZE + max(2 x 512 KiB, HTTP_CHUNK_SIZE)
+```
+
+With the defaults (5 MiB parts, 1 MiB chunks) that is ~11 MiB, plus ~45 MiB of
+process baseline (interpreter, boto3 and its models after the first call).
+Independence from clip length holds in measurement; what does scale is the
+number of cameras, because they upload concurrently and each holds its own
+working set while uploading. Measured peak RSS (150 x 50 MiB clips per run,
+concurrency verified server-side, fakes out-of-process so the server-side work
+is not charged to the uploader):
+
+| Cameras | Peak RSS | with `MALLOC_ARENA_MAX=1` | with `MALLOC_TRIM_THRESHOLD_=1MiB` on top |
+| --- | --- | --- | --- |
+| 2 | 105 MiB | 87 MiB | 74 MiB |
+| 4 | 140 MiB | 114 MiB | 85 MiB |
+| 8 | 205 MiB | 142 MiB | 112 MiB |
+
+Size requests at the measured peak and limits at double (OOM costs at most one
+in-flight clip, which the watermark re-archives on restart): 128Mi/256Mi for 1-2
+cameras, 160Mi/320Mi for 4, 224Mi/448Mi for 8 at image defaults; with
+`MALLOC_ARENA_MAX=1`, 96Mi/192Mi, 128Mi/256Mi and 160Mi/320Mi.
+
+`MALLOC_ARENA_MAX=1` is worth setting: it cut the peak by 17-37 % and cost
+nothing - total CPU fell 12-22 % and the archive pass got faster, because with
+one arena the pages of a finished part are reused by the next upload instead of
+being stranded in a per-thread heap. It is a peak reduction, not a smaller
+process: idle RSS between passes stays flat to higher, since only trimming gives
+pages back. `MALLOC_TRIM_THRESHOLD_=1MiB` does give them back and drops the peak
+further, but it is expensive - ~1.9-2.0x the total CPU, almost all of it system
+time (it pins the mmap threshold, so every part is mmapped and munmapped
+afresh), and ~1.8-2.1x the wall time against a fast endpoint or ~+9 % against a
+network-bound one. Raising `MALLOC_MMAP_THRESHOLD_` above `PART_SIZE` together
+with the trim buys that CPU back for most of the peak reduction: the cost was
+the mmap churn, not the trimming. `MALLOC_MMAP_THRESHOLD_=4MiB`, below
+`PART_SIZE`, buys most of the peak reduction for ~1.1-1.3x CPU when paired with
+the arena cap. The image sets none of them: a slower archive delays every
+alert the exporter exists to send. Exact
+numbers per configuration, camera count, CPU and throughput, plus the harness to
+reproduce them, live in [misc/mem-usage](misc/mem-usage/README.md)
+(`results.tsv`, `ANALYSIS.md`).
+
+Peak RSS also stops scaling with cameras once concurrent uploads reach the
+`asyncio.to_thread` default pool, which watermark reads and bucket listings
+share with uploads. The pool size depends on the interpreter: `min(32,
+os.cpu_count() + 4)` up to Python 3.12, `min(32, os.process_cpu_count() + 4)`
+from 3.13 - and only the latter follows the process's CPU *affinity*, so on the
+image's Python a pod whose CPUs are pinned (a cpuset) uploads with fewer
+cameras in flight and needs less memory than the camera count suggests, while
+on an older interpreter the same pod keeps the machine-wide pool. A pod limited
+only by CPU *quota* never shrinks the pool, it just goes slower. Count
+concurrent uploads before sizing memory from camera count.
+
+CPU needs without tuning are modest - no transcoding; per clip the work is
+reading the export, hashing it for the SigV4 signature, and TLS. Allow 1 core to
+absorb a backfilled pass across cameras.
+
 
 ### Crash recovery
 

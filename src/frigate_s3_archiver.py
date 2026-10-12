@@ -1023,6 +1023,28 @@ def _upload_clip_hybrid_sync(
 
         stream = response.iter_content(chunk_size=http_chunk_size)
 
+        # Peak clip memory, per active producer, is one buffer plus one copy:
+        #
+        #   buffer  (carry + the chunks since, so < part_size + chunk)
+        #   + the part handed to upload_part (part_size)
+        #   + the completeness tail window (max(2*TAIL_WINDOW_BYTES, chunk))
+        #   + the chunk being absorbed
+        #
+        # Handing a part to boto3 costs exactly one copy, and no less: boto3
+        # rejects a memoryview for ``Body``, and a bytearray is sent by value.
+        # It used to cost two, because slicing inside ``bytes()`` is itself a
+        # full copy - that second copy was the largest single allocation in a
+        # clip upload.
+        # Even one copy must be cut loose before the next one is taken: the
+        # rebinding in ``part_data = buffer[:part_size]`` allocates the new
+        # slice *before* the name drops the old part, so without the ``del``
+        # after each upload the live total at every part transition is two
+        # parts, not one - measured as the tracemalloc peak of a single
+        # upload. A memoryview into the buffer cannot replace the copy
+        # either: holding a view blocks the ``del buffer[:part_size]`` with
+        # BufferError (views pin even non-overlapping regions), and a view
+        # over the *new* tail would alias the wrong bytes once the buffer
+        # compacts.
         buffer = bytearray()
         tail = bytearray()
         tail_limit = max(2 * mp4_tail.TAIL_WINDOW_BYTES, http_chunk_size)
@@ -1074,7 +1096,7 @@ def _upload_clip_hybrid_sync(
             s3_client.put_object(
                 Bucket=s3_bucket,
                 Key=s3_key,
-                Body=bytes(buffer),
+                Body=buffer,
                 ContentType="video/mp4",
             )
             metrics.CLIPS_UPLOADED_TOTAL.labels(camera=camera).inc()
@@ -1101,7 +1123,10 @@ def _upload_clip_hybrid_sync(
         try:
             while len(buffer) >= part_size:
                 _check_cancelled(cancel_event, camera, s3_key)
-                part_data = bytes(buffer[:part_size])
+                # A bytearray slice is one copy, and boto3 sends a bytearray by
+                # value; bytes(buffer[:n]) would have made two copies of every
+                # part, and the part copy is the largest allocation in a clip.
+                part_data = buffer[:part_size]
                 del buffer[:part_size]
 
                 result = s3_client.upload_part(
@@ -1111,6 +1136,10 @@ def _upload_clip_hybrid_sync(
                     PartNumber=part_number,
                     Body=part_data,
                 )
+                # The part is dead the moment sendall returned; drop the name
+                # so the next slice does not overlap it (see the buffer
+                # comment for why this is the live peak, not a rounding).
+                del part_data
                 parts.append(
                     {
                         "PartNumber": part_number,
@@ -1127,7 +1156,7 @@ def _upload_clip_hybrid_sync(
                 absorb(chunk)
 
                 while len(buffer) >= part_size:
-                    part_data = bytes(buffer[:part_size])
+                    part_data = buffer[:part_size]
                     del buffer[:part_size]
 
                     result = s3_client.upload_part(
@@ -1137,6 +1166,7 @@ def _upload_clip_hybrid_sync(
                         PartNumber=part_number,
                         Body=part_data,
                     )
+                    del part_data  # see the first part loop: no overlap
                     parts.append(
                         {
                             "PartNumber": part_number,
@@ -1159,12 +1189,15 @@ def _upload_clip_hybrid_sync(
                     )
 
             if buffer:
+                # The buffer itself goes out: nothing touches it again after
+                # this call, so copying it to buy safety would only double the
+                # largest object still alive at the end of a clip.
                 result = s3_client.upload_part(
                     Bucket=s3_bucket,
                     Key=s3_key,
                     UploadId=upload_id,
                     PartNumber=part_number,
-                    Body=bytes(buffer),
+                    Body=buffer,
                 )
                 parts.append(
                     {
