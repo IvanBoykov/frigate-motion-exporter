@@ -111,6 +111,17 @@ names by path throughout, so treat them all as load-bearing.
 - `.github/dependabot.yml` opens weekly update PRs for the pip, Docker and
   GitHub Actions dependencies.
 - `env.example` - the template for the `.env` both compose files require.
+- `prometheus/` - alerting rules for the owner's own Kubernetes/VictoriaMetrics
+  deployment, kept here as a worked example of what the metric surface supports,
+  not as a supported part of the project: they encode one operator's scrape
+  cadence, label topology and thresholds, and no applicability to another
+  deployment is claimed or guaranteed. `alerts-k8s.yml` is the source of truth
+  (`prometheus/alerts-k8s_test.yml` and `vmrule.yaml` are generated from it by
+  `gen_alerts_k8s_tests.py` and `gen_vmrule.py`; edit the source, regenerate,
+  validate with `promtool check rules` and `promtool test rules`);
+  `prometheus/README.md` explains the 1m/1m cadence the timings assume and the
+  per-alert detection latencies. Deliberately not in CI - nothing here gates a
+  build.
 - `LICENSE` - GNU GPL v3.0 (see *Publishing* for why this license and what it
   obliges downstream users to do).
 

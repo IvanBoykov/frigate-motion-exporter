@@ -1,0 +1,194 @@
+# VictoriaMetrics VMRule generated from alerts-k8s.yml by
+# prometheus/gen_vmrule.py - edit the source or the generator, not this file.
+#
+# Each group carries the frigate-motion-exporter job filter as
+# params.extra_filters, which vmalert appends to every rule request; rule
+# expressions are written without job selectors because of it. The rules
+# themselves are identical to the ones promtool test rules validates.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: frigate-motion-exporter-alerts
+  namespace: frigate
+spec:
+  groups:
+    - name: frigate-motion-exporter.critical
+      interval: 1m
+      params:
+        extra_filters:
+          - '{job="frigate-motion-exporter"}'
+      rules:
+        - alert: FrigateMotionExporterDown
+          expr: up == 0
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: Frigate motion exporter target is not responding
+            description: The scrape target answers with up == 0 for more than 3 minutes. While this fires
+              the archive is unobservable - assume it is not growing until proven otherwise.
+        - alert: FrigateMotionExporterUnscrapeable
+          expr: absent_over_time(frigate_response_seconds_count[3m])
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: The Frigate motion exporter exports no metrics at all
+            description: 'Not a single exporter metric for 3 minutes: the pod is deleted, not ready, or
+              crash-looping (CrashLoopBackOff). This is what up == 0 cannot see.'
+        - alert: ArchiveTaskWedgedOrDead
+          expr: |
+            max_over_time(camera_task_running[15m]) == 0
+            and on(instance)
+            (time() - process_start_time_seconds) > 900
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: Camera task did not run a single minute in 15 minutes ({{ $labels.camera }})
+            description: 'camera_task_running did not go to 1 even once in 15 minutes - the supervisor''s
+              restart backoff is far shorter than that -, the process is older than 15 minutes, and the
+              state has held for another 10 minutes. There are exactly three causes: the supervisor is
+              in backoff, the task is wedged reading the watermark from an S3 that does not answer, or
+              the task never started. Look at errors_total{camera="{{ $labels.camera }}"} and CameraInDeepBackoff.'
+        - alert: ArchiveStalledWithMotion
+          expr: |
+            camera_motion_intervals_found > 0
+            and on(camera, instance)
+            delta(camera_watermark_timestamp_seconds[30m]) <= 0
+          for: 20m
+          labels:
+            severity: critical
+          annotations:
+            summary: 'Archiving stalled: motion pending, the watermark is not moving ({{ $labels.camera
+              }})'
+            description: 'Frigate reports motion intervals for {{ $labels.camera }}, but the watermark
+              has not moved for 30 minutes and the state has held for 20 minutes - roughly an hour without
+              archive progress. Frigate deletes recordings by retention: waiting turns into FootageLostInFrigate.'
+        - alert: ArchiveLagHigh
+          expr: |
+            (time() - camera_watermark_timestamp_seconds > 6 * 3600)
+            and on(camera, instance)
+            camera_motion_intervals_found > 0
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: Camera archive trails the present by more than 6 hours ({{ $labels.camera }})
+            description: 'The watermark trails by more than 6 hours and the camera is producing intervals
+              for archiving right now, so the lag is real and not an idle night. The motion guard is mandatory:
+              without it the rule fires on a camera that simply saw no motion. The threshold must stay
+              well below the Frigate retention, or there will be nothing left to catch up on.'
+        - alert: FootageLostInFrigate
+          expr: increase(clips_unavailable_uploaded_total[10m]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: 'Frigate lost recordings: window marked -no-recordings ({{ $labels.camera }})'
+            description: No attempt returned recordings for the window; it was closed with a marker so
+              the watermark cannot stall forever. That fragment is lost to archiving permanently. If the
+              cause is exporter lag, fix ArchiveLagHigh rather than this camera.
+        - alert: PermanentConfigRejection
+          expr: |
+            increase(errors_total{kind=~"s3_accessdenied|s3_nosuchbucket|s3_signaturedoesnotmatch|s3_invalidaccesskeyid|frigate_http_4xx"}[5m]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: Permanent S3 or Frigate configuration rejection ({{ $labels.kind }})
+            description: 'Errors of this kind in the last 5 minutes from {{ $labels.camera }}. Retrying
+              does not heal them: change credentials, bucket, prefix or the Frigate address.'
+        - alert: NoFrigateQueries
+          expr: |
+            increase(frigate_response_seconds_count{kind="json"}[15m]) == 0
+            unless on (instance)
+            increase(frigate_response_seconds_count{kind="clip_ttfb"}[15m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: The exporter neither queries Frigate nor downloads clips for 20 minutes
+            description: 'No JSON query to Frigate for 15 minutes and no clip downloaded over the same
+              15 minutes, the state holding for 5+ minutes. This is not catch-up: during catch-up the
+              JSON counter is silent while clip_ttfb grows. The process may still answer scrapes and look
+              alive by up. Typical cause - all camera tasks wedged (S3 blackhole) or dead; see ArchiveTaskWedgedOrDead
+              and errors_total.'
+        - alert: ProcessRestartLoop
+          expr: changes(process_start_time_seconds[30m]) > 2
+          labels:
+            severity: critical
+          annotations:
+            summary: The exporter restarted more than twice in 30 minutes
+            description: Crash loop. In-flight uploads are lost but the watermark re-reads them - what
+              degrades is time, not the archive. Check the container exit reason and the memory limit.
+    - name: frigate-motion-exporter.warning
+      interval: 1m
+      params:
+        extra_filters:
+          - '{job="frigate-motion-exporter"}'
+      rules:
+        - alert: ClipsArchivedTruncated
+          expr: increase(clips_truncated_uploaded_total[1h]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: Clips archived truncated within the last hour ({{ $labels.camera }})
+            description: 'Frigate cut the stream on every attempt; the clip is stored under a -truncated.mp4
+              key: it opens but is shorter than the interval. Look for load or disk issues on the Frigate
+              host.'
+        - alert: WatermarkMovedBackwards
+          expr: delta(camera_watermark_timestamp_seconds[15m]) < -900
+          labels:
+            severity: warning
+          annotations:
+            summary: Camera watermark moved back by more than 15 minutes ({{ $labels.camera }})
+            description: 'Within a process the watermark only moves forward; on a task restart it legitimately
+              regresses by the last clip length (no more than an interval chunk, 10 minutes). A regression
+              larger than 15 minutes means the S3 listing went empty: S3_PREFIX, S3_BUCKET or S3_KEY_TIMEZONE
+              changed. Archiving restarts from the first-run lookback; old objects are not overwritten,
+              but the resume point no longer matches the bucket contents.'
+        - alert: WatermarkInFuture
+          expr: camera_watermark_timestamp_seconds - time() > 600
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Camera watermark is in the future - Frigate clock skew ({{ $labels.camera }})
+            description: 'The watermark is more than 10 minutes ahead of the current time: the Frigate
+              clock runs fast and the archiver legitimately waits for "now" to catch up. ArchiveLagHigh
+              sees a negative lag and stays silent. Check time synchronization on the Frigate host.'
+        - alert: CameraInDeepBackoff
+          expr: camera_consecutive_failures >= 5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Camera restarted its task 5+ times in a row ({{ $labels.camera }})
+            description: The task keeps dying and the supervisor holds the restart backoff at up to 300
+              seconds. One healthy pass resets the counter, so a single fault never reaches this.
+    - name: frigate-motion-exporter.info
+      interval: 1m
+      params:
+        extra_filters:
+          - '{job="frigate-motion-exporter"}'
+      rules:
+        - alert: UnclassifiedErrorKind
+          expr: increase(errors_total{kind="unknown"}[1h]) > 0
+          labels:
+            severity: info
+          annotations:
+            summary: Errors with an unrecognized kind in the last hour ({{ $labels.camera }})
+            description: error_kind() did not recognize the exception type, so no alert can be built on
+              it. Find the type in the log and add it to the vocabulary.
+        - alert: ExporterResourceHigh
+          expr: |
+            process_open_fds > 100
+            or
+            process_resident_memory_bytes > 128e6
+          for: 30m
+          labels:
+            severity: info
+          annotations:
+            summary: The exporter is using a suspicious amount of resources
+            description: Growing fds mean sessions that are never closed; memory grows with the number
+              of cameras at work (a part-size buffer per camera). An OOM kill is only visible later, in
+              ProcessRestartLoop.

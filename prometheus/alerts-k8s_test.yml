@@ -1,0 +1,1168 @@
+# promtool unit tests for alerts-k8s.yml.
+# Run: promtool test rules prometheus/alerts-k8s_test.yml
+#
+# Each scenario feeds only metric shapes run_camera/supervise_camera
+# can actually produce; the header states expected behavior and the
+# minutes where it is pinned down.
+rule_files:
+  - alerts-k8s.yml
+evaluation_interval: 1m
+# The evaluation clock starts at zero, so process_start_time_seconds
+# values are expressed relative to it (negative = started before the
+# first sample), which is what age guards compare against.
+tests:
+
+  # S1 healthy 12 h, 2 cameras, pod restart at +3 h (4 min backoff, 8 min safe watermark regression, one process start): no rule fires, including the minutes right around the restart.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x720"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x180 0x2 1x538"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x720"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x180 1 2 0x538"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x179 10140+120x2 10380+60x536"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x720"
+      - series: camera_task_running{camera="yard_cam",instance="10.128.0.18:9108"}
+        values: "1x180 0x2 1x538"
+      - series: camera_motion_intervals_found{camera="yard_cam",instance="10.128.0.18:9108"}
+        values: "0x720"
+      - series: camera_consecutive_failures{camera="yard_cam",instance="10.128.0.18:9108"}
+        values: "0x180 1 2 0x538"
+      - series: camera_watermark_timestamp_seconds{camera="yard_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x179 10140+120x2 10380+60x536"
+      - series: clips_uploaded_total{camera="yard_cam",instance="10.128.0.18:9108"}
+        values: "0+1x720"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x180 180x540"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x720"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x720"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+2x720"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+2x720"
+    alert_rule_test:
+      - eval_time: 119m
+        alertname: FrigateMotionExporterDown
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: FootageLostInFrigate
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: PermanentConfigRejection
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: NoFrigateQueries
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: ProcessRestartLoop
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: ClipsArchivedTruncated
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: WatermarkMovedBackwards
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: CameraInDeepBackoff
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: UnclassifiedErrorKind
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: ExporterResourceHigh
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: WatermarkInFuture
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: FrigateMotionExporterDown
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: FootageLostInFrigate
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: PermanentConfigRejection
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: NoFrigateQueries
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: ProcessRestartLoop
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: ClipsArchivedTruncated
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: WatermarkMovedBackwards
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: CameraInDeepBackoff
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: UnclassifiedErrorKind
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: ExporterResourceHigh
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: WatermarkInFuture
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: FrigateMotionExporterDown
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: FootageLostInFrigate
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: PermanentConfigRejection
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: NoFrigateQueries
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: ProcessRestartLoop
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: ClipsArchivedTruncated
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: WatermarkMovedBackwards
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: CameraInDeepBackoff
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: UnclassifiedErrorKind
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: ExporterResourceHigh
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: WatermarkInFuture
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: FrigateMotionExporterDown
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: FootageLostInFrigate
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: PermanentConfigRejection
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: NoFrigateQueries
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: ProcessRestartLoop
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: ClipsArchivedTruncated
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: WatermarkMovedBackwards
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: CameraInDeepBackoff
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: UnclassifiedErrorKind
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: ExporterResourceHigh
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: WatermarkInFuture
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: FrigateMotionExporterDown
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: FootageLostInFrigate
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: PermanentConfigRejection
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: NoFrigateQueries
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: ProcessRestartLoop
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: ClipsArchivedTruncated
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: WatermarkMovedBackwards
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: CameraInDeepBackoff
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: UnclassifiedErrorKind
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: ExporterResourceHigh
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: WatermarkInFuture
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: FrigateMotionExporterDown
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: FootageLostInFrigate
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: PermanentConfigRejection
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: NoFrigateQueries
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: ProcessRestartLoop
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: ClipsArchivedTruncated
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: WatermarkMovedBackwards
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: CameraInDeepBackoff
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: UnclassifiedErrorKind
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: ExporterResourceHigh
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: WatermarkInFuture
+        exp_alerts: []
+
+  # S2 pod deleted/never scheduled: no target, hence no up series. Unscrapeable fires; up==0 stays silent - the hole the absent_over_time arm closes.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FrigateMotionExporterDown
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: FrigateMotionExporterDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+            exp_annotations:
+              summary: "The Frigate motion exporter exports no metrics at all"
+              description: "Not a single exporter metric for 3 minutes: the pod is deleted, not ready, or crash-looping (CrashLoopBackOff). This is what up == 0 cannot see."
+      - eval_time: 6m
+        alertname: FrigateMotionExporterDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+            exp_annotations:
+              summary: "The Frigate motion exporter exports no metrics at all"
+              description: "Not a single exporter metric for 3 minutes: the pod is deleted, not ready, or crash-looping (CrashLoopBackOff). This is what up == 0 cannot see."
+
+  # S3 target still listed, /metrics stops answering: Down fires, Unscrapeable fires too (no exporter metric series at all).
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x10 0x30"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: FrigateMotionExporterDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+            exp_annotations:
+              summary: "The Frigate motion exporter exports no metrics at all"
+              description: "Not a single exporter metric for 3 minutes: the pod is deleted, not ready, or crash-looping (CrashLoopBackOff). This is what up == 0 cannot see."
+      - eval_time: 15m
+        alertname: FrigateMotionExporterDown
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              severity: "critical"
+            exp_annotations:
+              summary: "Frigate motion exporter target is not responding"
+              description: "The scrape target answers with up == 0 for more than 3 minutes. While this fires the archive is unobservable - assume it is not growing until proven otherwise."
+      - eval_time: 15m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+            exp_annotations:
+              summary: "The Frigate motion exporter exports no metrics at all"
+              description: "Not a single exporter metric for 3 minutes: the pod is deleted, not ready, or crash-looping (CrashLoopBackOff). This is what up == 0 cannot see."
+
+  # S4 S3 blackhole wedging the watermark read: WedgedOrDead fires at 24m+, NoFrigateQueries at ~21m (JSON and clip counters both frozen - nothing is being downloaded either). Stalled and Lag stay silent BY DESIGN (the watermark series was never exported, nothing to match) - this pair is the coverage for that state.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x90"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x90"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x1 0x89"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x90"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x1 1x89"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x90"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x90"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x90"
+    alert_rule_test:
+      - eval_time: 26m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "critical"
+            exp_annotations:
+              summary: "Camera task did not run a single minute in 15 minutes (dacha_cam)"
+              description: "camera_task_running did not go to 1 even once in 15 minutes - the supervisor's restart backoff is far shorter than that -, the process is older than 15 minutes, and the state has held for another 10 minutes. There are exactly three causes: the supervisor is in backoff, the task is wedged reading the watermark from an S3 that does not answer, or the task never started. Look at errors_total{camera=\"dacha_cam\"} and CameraInDeepBackoff."
+      - eval_time: 26m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: NoFrigateQueries
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              kind: "json"
+              severity: "critical"
+            exp_annotations:
+              summary: "The exporter neither queries Frigate nor downloads clips for 20 minutes"
+              description: "No JSON query to Frigate for 15 minutes and no clip downloaded over the same 15 minutes, the state holding for 5+ minutes. This is not catch-up: during catch-up the JSON counter is silent while clip_ttfb grows. The process may still answer scrapes and look alive by up. Typical cause - all camera tasks wedged (S3 blackhole) or dead; see ArchiveTaskWedgedOrDead and errors_total."
+      - eval_time: 60m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "critical"
+            exp_annotations:
+              summary: "Camera task did not run a single minute in 15 minutes (dacha_cam)"
+              description: "camera_task_running did not go to 1 even once in 15 minutes - the supervisor's restart backoff is far shorter than that -, the process is older than 15 minutes, and the state has held for another 10 minutes. There are exactly three causes: the supervisor is in backoff, the task is wedged reading the watermark from an S3 that does not answer, or the task never started. Look at errors_total{camera=\"dacha_cam\"} and CameraInDeepBackoff."
+      - eval_time: 60m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: NoFrigateQueries
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              kind: "json"
+              severity: "critical"
+            exp_annotations:
+              summary: "The exporter neither queries Frigate nor downloads clips for 20 minutes"
+              description: "No JSON query to Frigate for 15 minutes and no clip downloaded over the same 15 minutes, the state holding for 5+ minutes. This is not catch-up: during catch-up the JSON counter is silent while clip_ttfb grows. The process may still answer scrapes and look alive by up. Typical cause - all camera tasks wedged (S3 blackhole) or dead; see ArchiveTaskWedgedOrDead and errors_total."
+
+  # S5 rolling update, two pods: young wedged pod A is guarded by ITS OWN age, not pod B's (with and on() pod B suppressed A forever). Silent at 20m (A younger than 15 min), fires at ~30m on A alone.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.19:9108"}
+        values: "1x120"
+      - series: camera_task_running{camera="yard_cam",instance="10.128.0.19:9108"}
+        values: "1x120"
+      - series: camera_motion_intervals_found{camera="yard_cam",instance="10.128.0.19:9108"}
+        values: "0x120"
+      - series: camera_consecutive_failures{camera="yard_cam",instance="10.128.0.19:9108"}
+        values: "0x120"
+      - series: camera_watermark_timestamp_seconds{camera="yard_cam",instance="10.128.0.19:9108"}
+        values: "-120+60x119"
+      - series: clips_uploaded_total{camera="yard_cam",instance="10.128.0.19:9108"}
+        values: "0+1x120"
+      - series: process_start_time_seconds{instance="10.128.0.19:9108"}
+        values: "-43200x120"
+      - series: process_open_fds{instance="10.128.0.19:9108"}
+        values: "12x120"
+      - series: process_resident_memory_bytes{instance="10.128.0.19:9108"}
+        values: "96075776x120"
+      - series: frigate_response_seconds_count{instance="10.128.0.19:9108",kind="json"}
+        values: "0+1x120"
+      - series: frigate_response_seconds_count{instance="10.128.0.19:9108",kind="clip_ttfb"}
+        values: "0+1x120"
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x120"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x120"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "300x120"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "critical"
+            exp_annotations:
+              summary: "Camera task did not run a single minute in 15 minutes (dacha_cam)"
+              description: "camera_task_running did not go to 1 even once in 15 minutes - the supervisor's restart backoff is far shorter than that -, the process is older than 15 minutes, and the state has held for another 10 minutes. There are exactly three causes: the supervisor is in backoff, the task is wedged reading the watermark from an S3 that does not answer, or the task never started. Look at errors_total{camera=\"dacha_cam\"} and CameraInDeepBackoff."
+
+  # S6 one long HEALTHY pass: 5 intervals uploaded for 35 min (watermark frozen mid-pass, JSON counter frozen mid-pass, motion gauge pinned). Stalled, Lag and NoFrigateQueries all ride it out - NoFrigateQueries because clip_ttfb grows while JSON sleeps (catch-up is life).
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x90"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x90"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x2 5x35 0x53"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x90"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x2 -60x35 -60+60x52"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x2 2x35 3+1x53"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0x2 1+1x34 35+1x54"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x90"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x90"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x90"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: NoFrigateQueries
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: NoFrigateQueries
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: NoFrigateQueries
+        exp_alerts: []
+
+  # S7 real stall: 4 intervals pending, watermark frozen 50+ min, task wedged uploading: Stalled fires at ~51m, NoFrigateQueries follows; Lag silent (watermark only 1 h deep, not 6).
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x120"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x20 0x100"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "4x120"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x120"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x10 420x110"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x1 1x119"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x20 20x100"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x120"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x120"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x120"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: NoFrigateQueries
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              kind: "json"
+              severity: "critical"
+            exp_annotations:
+              summary: "The exporter neither queries Frigate nor downloads clips for 20 minutes"
+              description: "No JSON query to Frigate for 15 minutes and no clip downloaded over the same 15 minutes, the state holding for 5+ minutes. This is not catch-up: during catch-up the JSON counter is silent while clip_ttfb grows. The process may still answer scrapes and look alive by up. Typical cause - all camera tasks wedged (S3 blackhole) or dead; see ArchiveTaskWedgedOrDead and errors_total."
+      - eval_time: 55m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 55m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 55m
+        alertname: NoFrigateQueries
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              kind: "json"
+              severity: "critical"
+            exp_annotations:
+              summary: "The exporter neither queries Frigate nor downloads clips for 20 minutes"
+              description: "No JSON query to Frigate for 15 minutes and no clip downloaded over the same 15 minutes, the state holding for 5+ minutes. This is not catch-up: during catch-up the JSON counter is silent while clip_ttfb grows. The process may still answer scrapes and look alive by up. Typical cause - all camera tasks wedged (S3 blackhole) or dead; see ArchiveTaskWedgedOrDead and errors_total."
+      - eval_time: 1h
+        alertname: ArchiveStalledWithMotion
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "critical"
+            exp_annotations:
+              summary: "Archiving stalled: motion pending, the watermark is not moving (dacha_cam)"
+              description: "Frigate reports motion intervals for dacha_cam, but the watermark has not moved for 30 minutes and the state has held for 20 minutes - roughly an hour without archive progress. Frigate deletes recordings by retention: waiting turns into FootageLostInFrigate."
+      - eval_time: 1h
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 1h
+        alertname: NoFrigateQueries
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              kind: "json"
+              severity: "critical"
+            exp_annotations:
+              summary: "The exporter neither queries Frigate nor downloads clips for 20 minutes"
+              description: "No JSON query to Frigate for 15 minutes and no clip downloaded over the same 15 minutes, the state holding for 5+ minutes. This is not catch-up: during catch-up the JSON counter is silent while clip_ttfb grows. The process may still answer scrapes and look alive by up. Typical cause - all camera tasks wedged (S3 blackhole) or dead; see ArchiveTaskWedgedOrDead and errors_total."
+
+  # S8 7 h deep frozen watermark WITH motion: Lag fires after its 30m `for` (silent at 20m); Stalled co-fires at ~51m.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x180"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x180"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "3x180"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x180"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-25200x180"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x180"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x180"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x180"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x180"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: ArchiveLagHigh
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "critical"
+            exp_annotations:
+              summary: "Camera archive trails the present by more than 6 hours (dacha_cam)"
+              description: "The watermark trails by more than 6 hours and the camera is producing intervals for archiving right now, so the lag is real and not an idle night. The motion guard is mandatory: without it the rule fires on a camera that simply saw no motion. The threshold must stay well below the Frigate retention, or there will be nothing left to catch up on."
+      - eval_time: 65m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "critical"
+            exp_annotations:
+              summary: "Archiving stalled: motion pending, the watermark is not moving (dacha_cam)"
+              description: "Frigate reports motion intervals for dacha_cam, but the watermark has not moved for 30 minutes and the state has held for 20 minutes - roughly an hour without archive progress. Frigate deletes recordings by retention: waiting turns into FootageLostInFrigate."
+
+  # S9 8 h deep watermark, ZERO motion, tracker healthy: the exact night-quiet case - Lag and Stalled silent.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x240"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x240"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x240"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x240"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-28800+60x239"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x240"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x240"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x240"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x240"
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 239m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 239m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+
+  # S10 unavailable=1 + truncated=9 in one 10-min window: separate rules fire separately (the old 'or' merged them into one warning). Loss alert expires after its 10-min window; truncation holds an hour.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x60"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x60"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x60"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x60"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x59"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x60"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x60"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x60"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x60"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x60"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x60"
+      - series: clips_unavailable_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x30 1x30"
+      - series: clips_truncated_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x30 9x30"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: FootageLostInFrigate
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "critical"
+            exp_annotations:
+              summary: "Frigate lost recordings: window marked -no-recordings (dacha_cam)"
+              description: "No attempt returned recordings for the window; it was closed with a marker so the watermark cannot stall forever. That fragment is lost to archiving permanently. If the cause is exporter lag, fix ArchiveLagHigh rather than this camera."
+      - eval_time: 35m
+        alertname: ClipsArchivedTruncated
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "warning"
+            exp_annotations:
+              summary: "Clips archived truncated within the last hour (dacha_cam)"
+              description: "Frigate cut the stream on every attempt; the clip is stored under a -truncated.mp4 key: it opens but is shorter than the interval. Look for load or disk issues on the Frigate host."
+      - eval_time: 45m
+        alertname: FootageLostInFrigate
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: ClipsArchivedTruncated
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "warning"
+            exp_annotations:
+              summary: "Clips archived truncated within the last hour (dacha_cam)"
+              description: "Frigate cut the stream on every attempt; the clip is stored under a -truncated.mp4 key: it opens but is shorter than the interval. Look for load or disk issues on the Frigate host."
+
+  # S11 AccessDenied storm: Permanent fires immediately, DeepBackoff when failures hold >= 5 for 5 min, WedgedOrDead only after 15 dead minutes + 10 for. Inhibition (Alertmanager side) suppresses the latter two under Permanent.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x45"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x4 0x41"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x45"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x5 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15x29"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x4 120x41"
+      - series: errors_total{camera="dacha_cam",instance="10.128.0.18:9108",kind="s3_accessdenied"}
+        values: "0x5 1+5x40"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x4 1x41"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x45"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x45"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x45"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: PermanentConfigRejection
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              kind: "s3_accessdenied"
+              severity: "critical"
+            exp_annotations:
+              summary: "Permanent S3 or Frigate configuration rejection (s3_accessdenied)"
+              description: "Errors of this kind in the last 5 minutes from dacha_cam. Retrying does not heal them: change credentials, bucket, prefix or the Frigate address."
+      - eval_time: 12m
+        alertname: CameraInDeepBackoff
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: PermanentConfigRejection
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              kind: "s3_accessdenied"
+              severity: "critical"
+            exp_annotations:
+              summary: "Permanent S3 or Frigate configuration rejection (s3_accessdenied)"
+              description: "Errors of this kind in the last 5 minutes from dacha_cam. Retrying does not heal them: change credentials, bucket, prefix or the Frigate address."
+      - eval_time: 17m
+        alertname: CameraInDeepBackoff
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "warning"
+            exp_annotations:
+              summary: "Camera restarted its task 5+ times in a row (dacha_cam)"
+              description: "The task keeps dying and the supervisor holds the restart backoff at up to 300 seconds. One healthy pass resets the counter, so a single fault never reaches this."
+      - eval_time: 17m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: PermanentConfigRejection
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              kind: "s3_accessdenied"
+              severity: "critical"
+            exp_annotations:
+              summary: "Permanent S3 or Frigate configuration rejection (s3_accessdenied)"
+              description: "Errors of this kind in the last 5 minutes from dacha_cam. Retrying does not heal them: change credentials, bucket, prefix or the Frigate address."
+      - eval_time: 30m
+        alertname: CameraInDeepBackoff
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "warning"
+            exp_annotations:
+              summary: "Camera restarted its task 5+ times in a row (dacha_cam)"
+              description: "The task keeps dying and the supervisor holds the restart backoff at up to 300 seconds. One healthy pass resets the counter, so a single fault never reaches this."
+      - eval_time: 30m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "critical"
+            exp_annotations:
+              summary: "Camera task did not run a single minute in 15 minutes (dacha_cam)"
+              description: "camera_task_running did not go to 1 even once in 15 minutes - the supervisor's restart backoff is far shorter than that -, the process is older than 15 minutes, and the state has held for another 10 minutes. There are exactly three causes: the supervisor is in backoff, the task is wedged reading the watermark from an S3 that does not answer, or the task never started. Look at errors_total{camera=\"dacha_cam\"} and CameraInDeepBackoff."
+
+  # S12 crash loop: 4 starts in 30 min; RestartLoop silent at 10m (one change is a deploy, and even a second is tolerated), fires at 35m.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x45"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x45"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x45"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x45"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x44"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x45"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x45"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x45"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x45"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-3600x10 600x10 1200x8 1800x17"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ProcessRestartLoop
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ProcessRestartLoop
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              severity: "critical"
+            exp_annotations:
+              summary: "The exporter restarted more than twice in 30 minutes"
+              description: "Crash loop. In-flight uploads are lost but the watermark re-reads them - what degrades is time, not the archive. Check the container exit reason and the memory limit."
+
+  # S13 S3_PREFIX switch: 3 h step down fires MovedBackwards for as long as the drop is inside the 15 min window, then resolves. The 8 min restart regression in S1 never fired it.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x70"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x70"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x70"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x70"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x30 -10920+60x40"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x70"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x70"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x70"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x70"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: WatermarkMovedBackwards
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "warning"
+            exp_annotations:
+              summary: "Camera watermark moved back by more than 15 minutes (dacha_cam)"
+              description: "Within a process the watermark only moves forward; on a task restart it legitimately regresses by the last clip length (no more than an interval chunk, 10 minutes). A regression larger than 15 minutes means the S3 listing went empty: S3_PREFIX, S3_BUCKET or S3_KEY_TIMEZONE changed. Archiving restarts from the first-run lookback; old objects are not overwritten, but the resume point no longer matches the bucket contents."
+      - eval_time: 55m
+        alertname: WatermarkMovedBackwards
+        exp_alerts: []
+
+  # S14 fd leak (150 open fds): ResourceHigh fires after its 30m `for`, not at 20m.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x80"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x80"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x80"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x80"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x79"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x80"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x80"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x80"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x80"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "150x80"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ExporterResourceHigh
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ExporterResourceHigh
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              severity: "info"
+            exp_annotations:
+              summary: "The exporter is using a suspicious amount of resources"
+              description: "Growing fds mean sessions that are never closed; memory grows with the number of cameras at work (a part-size buffer per camera). An OOM kill is only visible later, in ProcessRestartLoop."
+
+  # S15 long catch-up: JSON frozen from 2m while clip_ttfb streams for 50 min (a 45-min silent-JSON window is NORMAL); NoFrigateQueries and Stalled stay silent. At 50m the stream dies too - both increases hit zero and the rule fires 20 min later.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x90"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x90"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "8x90"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x90"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-7080+60x50 -4080x40"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x2 2x88"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x50 50x40"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x90"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x90"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x90"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: NoFrigateQueries
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: NoFrigateQueries
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              kind: "json"
+              severity: "critical"
+            exp_annotations:
+              summary: "The exporter neither queries Frigate nor downloads clips for 20 minutes"
+              description: "No JSON query to Frigate for 15 minutes and no clip downloaded over the same 15 minutes, the state holding for 5+ minutes. This is not catch-up: during catch-up the JSON counter is silent while clip_ttfb grows. The process may still answer scrapes and look alive by up. Typical cause - all camera tasks wedged (S3 blackhole) or dead; see ArchiveTaskWedgedOrDead and errors_total."
+      - eval_time: 75m
+        alertname: ArchiveStalledWithMotion
+        exp_alerts: []
+
+  # S16 Frigate clock 30 min ahead (NTP broken): watermark lives in the future, Lag computes negative and stays silent the whole time, WatermarkInFuture fires after its for.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x60"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x60"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x60"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x60"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1800+60x59"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x60"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x60"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x60"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x60"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x60"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: WatermarkInFuture
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: WatermarkInFuture
+        exp_alerts:
+          - exp_labels:
+              camera: "dacha_cam"
+              instance: "10.128.0.18:9108"
+              severity: "warning"
+            exp_annotations:
+              summary: "Camera watermark is in the future - Frigate clock skew (dacha_cam)"
+              description: "The watermark is more than 10 minutes ahead of the current time: the Frigate clock runs fast and the archiver legitimately waits for \"now\" to catch up. ArchiveLagHigh sees a negative lag and stays silent. Check time synchronization on the Frigate host."
+      - eval_time: 15m
+        alertname: ArchiveLagHigh
+        exp_alerts: []
+
+  # S17 Frigate dead at startup: discovery exhausts 12x5s, exit(1), k8s restarts. up stays 1 (server binds before discovery), so Down/Unscrapeable cannot see it; no camera series exist, so no camera rule can fire; failed calls still count JSON, so rule 7 is silent. ProcessRestartLoop is what pages.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x45"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-600x1 0x1 60x2 150x1 240x2 390x2 540x36"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+12x2 12+12x3 48+12x5 108+12x9 216+12x26"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x45"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x45"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ProcessRestartLoop
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              severity: "critical"
+            exp_annotations:
+              summary: "The exporter restarted more than twice in 30 minutes"
+              description: "Crash loop. In-flight uploads are lost but the watermark re-reads them - what degrades is time, not the archive. Check the container exit reason and the memory limit."
+      - eval_time: 10m
+        alertname: FrigateMotionExporterDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: NoFrigateQueries
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ArchiveTaskWedgedOrDead
+        exp_alerts: []
+
+  # S18 post-cap crash-loop: 62 s alive + 300 s kubelet backoff, forever. RestartLoop fires (every ~6 min a new start, 5+ changes per 30m window - it never resolves while Frigate is down); Down joins at the gaps: each dead gap is 5 min > 3m for. Unscrapeable stays silent: the 5m gaps never starve the 5m stale window long enough to keep absent() pending 3m.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "0 _ _ _ _ _ 21600 _ _ _ _ _ 43200 _ _ _ _ _ 64800 _ _ _ _ _ 86400 _ _ _ _ _ 108000 _ _ _ _ _ 129600 _ _ _"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0 _ _ _ _ _ 12 _ _ _ _ _ 24 _ _ _ _ _ 36 _ _ _ _ _ 48 _ _ _ _ _ 60 _ _ _ _ _ 72 _ _ _"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ProcessRestartLoop
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: FrigateMotionExporterDown
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              severity: "critical"
+            exp_annotations:
+              summary: "Frigate motion exporter target is not responding"
+              description: "The scrape target answers with up == 0 for more than 3 minutes. While this fires the archive is unobservable - assume it is not growing until proven otherwise."
+      - eval_time: 4m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ProcessRestartLoop
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: FrigateMotionExporterDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ProcessRestartLoop
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              severity: "critical"
+            exp_annotations:
+              summary: "The exporter restarted more than twice in 30 minutes"
+              description: "Crash loop. In-flight uploads are lost but the watermark re-reads them - what degrades is time, not the archive. Check the container exit reason and the memory limit."
+      - eval_time: 20m
+        alertname: FrigateMotionExporterDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: FrigateMotionExporterUnscrapeable
+        exp_alerts: []

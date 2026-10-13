@@ -229,6 +229,11 @@ kinds `s3_timeout`, `s3_unreachable`, `s3_connection_reset`,
 alerting on individually and cannot be enumerated. An error that matches nothing
 is `unknown` - counted, never dropped.
 
+A worked example of rules for these metrics - written for one operator's
+Kubernetes/VictoriaMetrics deployment, thresholds included, applicability to
+anything else not guaranteed - lives in `prometheus/alerts-k8s.yml`; see
+`prometheus/README.md` for what to retune before reusing it.
+
 Useful alerts:
 
 ```promql
