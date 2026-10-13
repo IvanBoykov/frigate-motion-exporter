@@ -545,13 +545,15 @@ This tree is meant to be public. Before publishing (or re-publishing) a snapshot
    git cat-file -t $b | grep -q blob && git cat-file blob $b | grep -aIl '<pattern>' /dev/stdin; done`.
    Re-run it after any commit that touches `.secrets`-adjacent material.
 3. Commit metadata is published with the repository, and the owner has decided which
-   identities appear there. Every commit is authored and committed as `Ivan Boykov`,
-   under `ivan+gh@boykov.org.ru` where the agent contributed and under the older
-   `ivan@boykov.org.ru` where the owner wrote it alone. Where the agent contributed,
-   credit is carried by the trailer `Co-authored-by: openhands <openhands@all-hands.dev>`
+   identities appear there. Every commit is authored and committed as the owner under
+   one of his two addresses: the one marking agent-contributed work, and an older
+   one used where he wrote alone. Where the agent contributed, credit is carried
+   by the trailer `Co-authored-by: openhands <openhands@all-hands.dev>`
    rather than by the author field; a commit the owner wrote alone has no trailer and
    must not gain one. This email attribution is settled - do not re-raise it as a leak
-   and do not invent a new agent author identity. Check the current state with
+   and do not invent a new agent author identity. The addresses themselves are decided
+   per-commit in git metadata and are deliberately not spelled out in this file, so a
+   fork does not inherit them by reading the docs; read them from the repository with
    `git log master --format='%ae %ce' | sort -u`.
    Metadata was once rewritten across the whole branch with `git filter-branch`, which
    changed every SHA and needed a `--force-with-lease` push. Rewriting published
