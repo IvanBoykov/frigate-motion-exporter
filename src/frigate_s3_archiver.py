@@ -110,8 +110,8 @@ _MAX_BACKOFF_DOUBLINGS = 1023
 # (20 s per retry) is also what the blackhole pays. Raising attempts past this
 # point pushes the blackhole past three minutes without a matching gain.
 # botocore rewinds a request body only when it can, which is why every Body in
-# the upload path is bytes, not a stream - otherwise parts would fail without
-# a single retry.
+# the upload path is in-memory bytes/bytearray, never a stream - otherwise
+# parts would fail without a single retry.
 DEFAULT_S3_CONNECT_TIMEOUT_SECONDS = 5
 DEFAULT_S3_READ_TIMEOUT_SECONDS = 8.0
 DEFAULT_S3_TOTAL_MAX_ATTEMPTS = 10

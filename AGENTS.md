@@ -35,7 +35,8 @@ a public snapshot has to satisfy.
 - Segment objects expose `start_time`, `end_time` (float seconds) and `motion`
   (number of motion-detecting segments / motion score) used to decide motion presence.
 - `GET /api/{camera}/start/{start}/end/{end}/clip.mp4` streams an MP4 and works with
-  Basic Auth. Pass integer timestamps (`math.ceil`), as the code does - never a raw
+  Basic Auth. Pass integer timestamps (`math.floor` on the start, `math.ceil` on the
+  end, so the window only widens outward), as the code does - never a raw
   float formatted with `{ts:g}`: that yields `1.79042e+09`, which Frigate silently
   rounds to the nearest second and answers with `200 OK` and a **wrong-window clip**,
   not an error. A zero-byte export does happen on its own
@@ -106,7 +107,7 @@ names by path throughout, so treat them all as load-bearing.
   `requirements.txt` alone with `--require-hashes`, so the test dependency must
   never move into `requirements.in`.
 - `.github/workflows/test.yml` installs both locks and runs `pytest` on Python 3.14
-  for every push and pull request.
+  for pushes to `main`/`master` and for every pull request.
 - `.github/dependabot.yml` opens weekly update PRs for the pip, Docker and
   GitHub Actions dependencies.
 - `env.example` - the template for the `.env` both compose files require.
@@ -308,7 +309,9 @@ process-global `prometheus_client` registry, and `async_main` binds `METRICS_POR
 - `camera_watermark_timestamp_seconds{camera}` - the watermark the task actually
   holds, i.e. how far the archive reaches. Set by `run_camera` next to
   `camera_task_running`, once the watermark read returns, and again after each pass
-  that stored a clip. So it is absent for a task wedged on the watermark read -
+  that processed intervals through `upload_intervals` - whether their clips were
+  new or already present, since either way the pass proved them archived. So it is
+  absent for a task wedged on the watermark read -
   deliberately, because a first-run guess is not a watermark - and flat for a camera
   that simply has no new motion. It is the only metric that reads archive depth
   rather than process health: a camera that stopped advancing is invisible in every
@@ -380,7 +383,8 @@ are worth separating, because they cost different things:
 
 botocore re-sends a request body only when it can rewind it, so an upload path
 that hands S3 a stream would fail on the first 5xx without one retry. Every body
-in the upload path is `bytes` for that reason; a test pins it.
+in the upload path is rewindable in-memory bytes or bytearray for that reason
+(never a stream); a test pins it.
 
 ## Tests
 
@@ -516,8 +520,9 @@ something under 35 days is the cheapest durability win available.
 ## Dependencies
 
 - Python 3.14; see `requirements.txt` (`requests`, `boto3`,
-  `prometheus-client`). `.github/workflows/test.yml` runs the suite on 3.14 for every
-  push. `requirements.txt` is a `pip-compile` lock pinned by Python 3.14, which matches
+  `prometheus-client`). `.github/workflows/test.yml` runs the suite on 3.14 for
+  pushes to `main`/`master` and for every pull request. `requirements.txt` is a
+  `pip-compile` lock pinned by Python 3.14, which matches
   the `python:3.14-slim` image; regenerate it from `requirements.in` with that same
   interpreter so the lock header and the runtime stay in step.
 - Tests additionally need `pytest`, pinned by its own pair: `requirements.dev.in`
@@ -545,12 +550,14 @@ This tree is meant to be public. Before publishing (or re-publishing) a snapshot
    git cat-file -t $b | grep -q blob && git cat-file blob $b | grep -aIl '<pattern>' /dev/stdin; done`.
    Re-run it after any commit that touches `.secrets`-adjacent material.
 3. Commit metadata is published with the repository, and the owner has decided which
-   identities appear there. Every commit is authored and committed as the owner under
-   one of his two addresses: the one marking agent-contributed work, and an older
-   one used where he wrote alone. Where the agent contributed, credit is carried
-   by the trailer `Co-authored-by: openhands <openhands@all-hands.dev>`
-   rather than by the author field; a commit the owner wrote alone has no trailer and
-   must not gain one. This email attribution is settled - do not re-raise it as a leak
+   identities appear there. Commits come in three kinds: one the owner wrote alone,
+   authored and committed under his older address with no trailer; one he pushed
+   under his own name where the agent contributed, authored under the address that
+   marks agent-contributed work and carrying the trailer
+   `Co-authored-by: openhands <openhands@all-hands.dev>`; and ones the agent
+   pushed directly, authored under agent identities and carrying the same trailer.
+   A commit the owner wrote alone has no trailer and must not gain one. This email
+   attribution is settled - do not re-raise it as a leak
    and do not invent a new agent author identity. The addresses themselves are decided
    per-commit in git metadata and are deliberately not spelled out in this file, so a
    fork does not inherit them by reading the docs; read them from the repository with
@@ -592,7 +599,8 @@ This tree is meant to be public. Before publishing (or re-publishing) a snapshot
    Source files carry no SPDX headers, so authorship travels only through git history
    and `LICENSE`. Per-file `SPDX-License-Identifier: GPL-3.0-only` headers are the
    belt-and-braces option if that ever matters.
-7. `.github/workflows/test.yml` runs `pytest` on Python 3.14 for every push and pull
+7. `.github/workflows/test.yml` runs `pytest` on Python 3.14 for pushes to
+   `main`/`master` and for every pull
    request - 3.14 only, because it is the only version the project claims to support
    and the version the image and the locks use. `docker-publish.yml` builds and pushes
    the image. A public repository that advertises a test suite should run it somewhere

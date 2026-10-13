@@ -211,7 +211,7 @@ startup rather than silently disabling observability.
 | `camera_consecutive_failures` | Gauge | `camera` | Crash/restart count since the last healthy pass |
 | `camera_task_running` | Gauge | `camera` | 1 while the camera task works (watermark resolved); 0 at startup, on a wedged watermark read, during backoff |
 | `camera_motion_intervals_found` | Gauge | `camera` | Intervals returned by the camera's most recent motion-interval search; 0 while the latest search found nothing, stale while the search itself fails |
-| `camera_watermark_timestamp_seconds` | Gauge | `camera` | Unix timestamp of the camera's watermark: footage before it is archived in S3. Set once the watermark read returns, then on every pass that stored a clip. Absent while the task is wedged on that read |
+| `camera_watermark_timestamp_seconds` | Gauge | `camera` | Unix timestamp of the camera's watermark: footage before it is archived in S3. Set once the watermark read returns, then on every pass that processed intervals - their clips newly stored or already present. Absent while the task is wedged on that read |
 
 `frigate_response_seconds{kind="json"}` covers the metadata requests
 (`/api/config`, `/api/{camera}/recordings`); `kind="clip_ttfb"` measures the time
@@ -258,7 +258,8 @@ nothing is archived yet, which is true.
 `camera_watermark_timestamp_seconds` answers "how much footage is in S3". It
 carries the same boundary the archiver resumes from, so
 `time() - camera_watermark_timestamp_seconds` is how far the archive trails the
-present. It moves only on a pass that stored a clip, so a camera with no new
+present. It moves on a pass that processed intervals - whether their clips were
+newly stored or already present - so a camera with no new
 motion holds its value while remaining perfectly healthy - pair it with
 `camera_motion_intervals_found` before reading a flat line as a stall. The
 gauge appears only after the watermark read returns, which is why a task wedged

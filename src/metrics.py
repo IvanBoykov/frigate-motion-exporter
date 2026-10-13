@@ -89,7 +89,8 @@ CAMERA_MOTION_INTERVALS_FOUND = Gauge(
 CAMERA_WATERMARK_TIMESTAMP_SECONDS = Gauge(
     "camera_watermark_timestamp_seconds",
     "Unix timestamp of this camera's watermark: footage before it is archived"
-    " in S3. It advances on a pass that stored a clip and holds while no new"
+    " in S3. It advances on a pass that processed intervals - newly stored or"
+    " already-present clips - and holds while no new"
     " motion is found, so a quiet camera and a stalled one read the same here",
     ["camera"],
 )
