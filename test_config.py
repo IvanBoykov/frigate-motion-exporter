@@ -5,6 +5,7 @@ import re
 import pytest
 
 import frigate_s3_archiver as m
+import retention
 from config import ConfigError, load_config
 
 
@@ -341,4 +342,92 @@ class TestEmptySelectionMessage:
         assert "CAMERAS_INCLUDE" in message
         assert "^nope" in message
         assert "2" in message
+
+
+class TestRetention:
+    """Retention is the first feature that destroys archive state, so its
+    configuration is checked for the shapes that can only end badly - not just
+    for parse errors."""
+
+    def test_no_threshold_means_no_retention(self):
+        cfg = load()
+
+        assert cfg.retention_keep_days is None
+        assert cfg.retention_keep_bytes is None
+        assert cfg.retention_enabled is False
+
+    def test_days_alone_enables_retention(self):
+        cfg = load(RETENTION_KEEP_DAYS=7)
+
+        assert cfg.retention_keep_days == 7
+        assert cfg.retention_enabled is True
+
+    def test_blank_thresholds_are_unset_not_zero(self):
+        cfg = load(RETENTION_KEEP_DAYS="", RETENTION_KEEP_BYTES="")
+
+        assert cfg.retention_keep_days is None
+        assert cfg.retention_keep_bytes is None
+        assert cfg.retention_enabled is False
+
+    def test_deletion_defaults_to_dry_run(self):
+        cfg = load(RETENTION_KEEP_DAYS=7)
+
+        assert cfg.retention_dry_run is True
+
+    def test_upload_depth_follows_the_day_threshold_by_default(self):
+        cfg = load(RETENTION_KEEP_DAYS=7)
+
+        assert cfg.retention_limit_upload_depth is True
+
+    def test_size_target_without_days_is_refused(self):
+        message = error_variable(RETENTION_KEEP_BYTES=100 * 1024**3)
+
+        assert message.startswith("RETENTION_KEEP_DAYS:")
+        assert "RETENTION_KEEP_BYTES" in message
+
+    @pytest.mark.parametrize("value", [0, -1])
+    def test_keeping_no_day_is_refused(self, value):
+        message = error_variable(RETENTION_KEEP_DAYS=value)
+
+        assert message.startswith("RETENTION_KEEP_DAYS:")
+
+    def test_days_may_be_smaller_than_the_headroom_allows(self):
+        """A day threshold alone is a legitimate configuration: the archive is
+        then bounded by age and nothing else."""
+        cfg = load(RETENTION_KEEP_DAYS=1)
+
+        assert cfg.retention_keep_days == 1
+
+    def test_headroom_override_is_optional(self):
+        assert load().retention_growth_headroom_bytes is None
+        assert (
+            load(RETENTION_GROWTH_HEADROOM_BYTES=1024)
+        ).retention_growth_headroom_bytes == 1024
+
+    @pytest.mark.parametrize(
+        "name, value",
+        [
+            ("RETENTION_KEEP_DAYS", "seven"),
+            ("RETENTION_KEEP_BYTES", "10GB"),
+            ("RETENTION_MAX_DELETE_PERCENT", "150"),
+            ("RETENTION_MAX_DELETE_PERCENT", "0"),
+            ("RETENTION_MAX_UNKNOWN_FRACTION", "1.5"),
+            ("RETENTION_PRUNE_INTERVAL_SECONDS", "30"),
+            ("RETENTION_DRY_RUN", "maybe"),
+        ],
+    )
+    def test_invalid_value_names_the_variable(self, name, value):
+        message = error_variable(**{name: value})
+
+        assert message.startswith(f"{name}:")
+
+    def test_prune_interval_default_lists_the_prefix_not_too_often(self):
+        cfg = load()
+
+        assert cfg.retention_prune_interval_seconds == (
+            retention.DEFAULT_RETENTION_PRUNE_INTERVAL_SECONDS
+        )
+        assert cfg.retention_max_delete_percent == (
+            retention.DEFAULT_RETENTION_MAX_DELETE_PERCENT
+        )
 

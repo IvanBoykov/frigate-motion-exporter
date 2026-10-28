@@ -25,11 +25,26 @@ from collections import namedtuple
 
 log = logging.getLogger("retention")
 
+HOURS_PER_DAY = 24
+
+# Defaults for the knobs that only retention interprets. Both thresholds are
+# unset by default: an upgrade changes nothing until an operator asks for
+# deletion, which additionally defaults to a dry run.
+DEFAULT_RETENTION_PRUNE_INTERVAL_SECONDS = 2700.0
+DEFAULT_RETENTION_MAX_DELETE_PERCENT = 25.0
+DEFAULT_RETENTION_MAX_UNKNOWN_FRACTION = 0.5
+# A prune pass lists the whole prefix, so a pass that frequent would cost more
+# in list requests than the deletion it plans is worth.
+MIN_RETENTION_PRUNE_INTERVAL_SECONDS = 60.0
+DEFAULT_PRUNE_BACKOFF_SECONDS = 30.0
+DEFAULT_PRUNE_BACKOFF_MAX_SECONDS = 1800.0
+
 # Why a pass stopped where it did. Reported, never acted on: each of these
 # means "the configuration or the bucket said stop", and an operator has to be
 # able to tell which one from the metric alone.
 REASON_TARGET_MET = "target_met"
 REASON_FLOOR = "floor"
+REASON_HEADROOM = "headroom"
 REASON_PERCENT_CAP = "percent_cap"
 REASON_FOREIGN_KEYS = "foreign_keys"
 
@@ -197,6 +212,32 @@ def build_plan(
         )
         return _empty_plan(
             census, REASON_FOREIGN_KEYS, headroom_bytes=headroom_bytes
+        )
+
+    if (
+        keep_bytes is not None
+        and headroom_bytes > 0
+        and headroom_bytes >= int(keep_bytes)
+    ):
+        # The target cannot be met by any amount of deletion: reaching it would
+        # require deleting the whole archive and still leaving the growth that
+        # has to fit. That is a misconfiguration rather than a bucket state, so
+        # nothing is deleted and the numbers go to the log.
+        log.error(
+            "RETENTION_KEEP_BYTES=%d cannot hold the archive and its growth:"
+            " one prune interval is expected to add %d bytes. Raise"
+            " RETENTION_KEEP_BYTES or lower RETENTION_PRUNE_INTERVAL_SECONDS.",
+            int(keep_bytes),
+            headroom_bytes,
+        )
+        return _empty_plan(
+            census,
+            REASON_HEADROOM,
+            target_bytes=int(keep_bytes),
+            headroom_bytes=headroom_bytes,
+            needed_bytes=total + headroom_bytes - int(keep_bytes),
+            over_budget_bytes=total,
+            cameras=_reports(census, _horizons(census, frozenset()), {}),
         )
 
     rows = _candidate_rows(census)

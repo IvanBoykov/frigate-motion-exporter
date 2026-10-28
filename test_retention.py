@@ -411,7 +411,7 @@ def test_large_folders_are_taken_first_within_an_hour():
     s3.put(key("a", 100, 0), 1)
     s3.put(key("b", 100, 0), 1)
     result = take(s3, floor_hours=0)
-    plan = rt.build_plan(result, keep_bytes=0, max_delete_percent=100)
+    plan = rt.build_plan(result, keep_bytes=1, max_delete_percent=100)
 
     assert [folder.camera for folder in plan.folders] == ["a", "b"]
 

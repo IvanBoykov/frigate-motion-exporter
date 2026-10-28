@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import logging_setup
+import retention
 
 import frigate_s3_archiver as defaults
 
@@ -73,6 +74,95 @@ def _flag(environ, name, default):
         name,
         f"expected a boolean (true/false), got {raw!r}",
     )
+
+
+def _bytes(environ, name, minimum=None):
+    """An optional byte count: unset/blank is None, a set value is a positive int.
+
+    Both retention thresholds are optional in a way no other knob is - unset
+    means "this threshold is not configured", not "use a default" - so they get
+    their own reader instead of a sentinel default.
+    """
+    raw = _present(environ, name)
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ConfigError(name, f"expected an integer byte count, got {raw!r}")
+    if minimum is not None and value < minimum:
+        raise ConfigError(name, f"expected >= {minimum}, got {value}")
+    return value
+
+
+def _retention(environ):
+    """Parse and cross-check the retention knobs.
+
+    Two rules are refused here rather than discovered at runtime, because both
+    describe a configuration whose effect can only be surprising:
+
+    - ``RETENTION_KEEP_BYTES`` without ``RETENTION_KEEP_DAYS`` leaves the
+      archive with no age limit at all, so one mistyped digit in the byte
+      target would walk the archive down to its newest hour over a few passes.
+    - ``RETENTION_KEEP_DAYS=0`` means "keep no day", which is a request to
+      empty the bucket expressed as a threshold.
+    """
+    keep_days = _number(
+        environ, "RETENTION_KEEP_DAYS", None, int, minimum=None
+    )
+    keep_bytes = _bytes(environ, "RETENTION_KEEP_BYTES", minimum=1)
+
+    if keep_bytes is not None and keep_days is None:
+        raise ConfigError(
+            "RETENTION_KEEP_DAYS",
+            "RETENTION_KEEP_DAYS is required when RETENTION_KEEP_BYTES is"
+            " set: a size target alone leaves no age limit, so one wrong"
+            " digit would delete the archive down to its newest hour",
+        )
+    if keep_days is not None and keep_days < 1:
+        raise ConfigError(
+            "RETENTION_KEEP_DAYS",
+            "must be >= 1; 0 would keep no day at all. Leave both retention"
+            " thresholds unset to disable deletion",
+        )
+
+    percent = _number(
+        environ,
+        "RETENTION_MAX_DELETE_PERCENT",
+        retention.DEFAULT_RETENTION_MAX_DELETE_PERCENT,
+        float,
+        minimum=0.1,
+        maximum=100.0,
+    )
+    unknown_fraction = _number(
+        environ,
+        "RETENTION_MAX_UNKNOWN_FRACTION",
+        retention.DEFAULT_RETENTION_MAX_UNKNOWN_FRACTION,
+        float,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    prune_interval = _seconds(
+        environ,
+        "RETENTION_PRUNE_INTERVAL_SECONDS",
+        retention.DEFAULT_RETENTION_PRUNE_INTERVAL_SECONDS,
+        minimum=retention.MIN_RETENTION_PRUNE_INTERVAL_SECONDS,
+    )
+
+    return {
+        "retention_keep_days": keep_days,
+        "retention_keep_bytes": keep_bytes,
+        "retention_max_delete_percent": percent,
+        "retention_max_unknown_fraction": unknown_fraction,
+        "retention_prune_interval_seconds": prune_interval,
+        "retention_growth_headroom_bytes": _bytes(
+            environ, "RETENTION_GROWTH_HEADROOM_BYTES", minimum=0
+        ),
+        "retention_dry_run": _flag(environ, "RETENTION_DRY_RUN", True),
+        "retention_limit_upload_depth": _flag(
+            environ, "RETENTION_LIMIT_UPLOAD_DEPTH", True
+        ),
+    }
 
 
 def _log_level(environ, name, default):
@@ -146,8 +236,28 @@ class Config:
     clip_retry_max_delay_seconds: float
     camera_restart_backoff_seconds: float
     camera_restart_backoff_max_seconds: float
+    retention_keep_days: object
+    retention_keep_bytes: object
+    retention_max_delete_percent: float
+    retention_max_unknown_fraction: float
+    retention_prune_interval_seconds: float
+    retention_growth_headroom_bytes: object
+    retention_dry_run: bool
+    retention_limit_upload_depth: bool
     log_level: int
     log_json: bool
+
+    @property
+    def retention_enabled(self):
+        """Whether a prune task should run at all.
+
+        Unset thresholds mean unset, not "delete everything": with neither set
+        the archiver behaves exactly as it did before retention existed.
+        """
+        return (
+            self.retention_keep_days is not None
+            or self.retention_keep_bytes is not None
+        )
 
 
 def load_config(environ=None):
@@ -252,6 +362,7 @@ def _load(environ):
         ),
         camera_restart_backoff_seconds=backoff,
         camera_restart_backoff_max_seconds=backoff_max,
+        **_retention(environ),
         log_level=_log_level(environ, "LOG_LEVEL", logging_setup.DEFAULT_LOG_LEVEL),
         log_json=_flag(environ, "LOG_JSON", False),
     )

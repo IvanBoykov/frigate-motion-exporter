@@ -1554,8 +1554,18 @@ async def resolve_camera_watermark(
     watermark_lookback_seconds=DEFAULT_WATERMARK_LOOKBACK_SECONDS,
     first_run_lookback_seconds=DEFAULT_FIRST_RUN_LOOKBACK_SECONDS,
     key_prefix="",
+    max_upload_age_seconds=None,
 ):
-    """Return the timestamp to resume scanning a camera from."""
+    """Return the timestamp to resume scanning a camera from.
+
+    ``max_upload_age_seconds`` caps a cold start's depth. Retention deletes
+    footage older than its day threshold, so re-archiving past that boundary
+    would spend Frigate's export time on clips the next prune pass removes -
+    and on a bucket with a long history it would do so on every restart. The
+    cap comes from the configured threshold rather than from the pruner's own
+    view of the bucket, so a camera task never depends on a prune pass having
+    run.
+    """
     last_start = await asyncio.to_thread(
         get_last_processed_time,
         camera=camera,
@@ -1572,10 +1582,20 @@ async def resolve_camera_watermark(
         return float(last_start)
 
     start_time = float(now_ts) - float(first_run_lookback_seconds)
+    age_note = f"the last {int(first_run_lookback_seconds) // 3600} h"
+    if max_upload_age_seconds:
+        oldest_worth_archiving = float(now_ts) - float(max_upload_age_seconds)
+        if oldest_worth_archiving > start_time:
+            start_time = oldest_worth_archiving
+            age_note = (
+                f"the last {int(max_upload_age_seconds) // 3600} h, capped by"
+                " RETENTION_KEEP_DAYS (older footage would be deleted again)"
+            )
+
     log.info(
-        "No clips found in S3. Starting at %s (the last %d h).",
+        "No clips found in S3. Starting at %s (%s).",
         human_ts(start_time, key_timezone),
-        int(first_run_lookback_seconds) // 3600,
+        age_note,
     )
     return start_time
 
@@ -1598,6 +1618,7 @@ async def run_camera(
     clip_retry_max_delay=DEFAULT_CLIP_RETRY_MAX_DELAY_SECONDS,
     max_gap_seconds=DEFAULT_MAX_GAP_SECONDS,
     key_prefix="",
+    max_upload_age_seconds=None,
 ):
     """Archive one camera forever: watermark, scan, upload, rescan, wait.
 
@@ -1617,6 +1638,7 @@ async def run_camera(
         watermark_lookback_seconds=watermark_lookback_seconds,
         first_run_lookback_seconds=first_run_lookback_seconds,
         key_prefix=key_prefix,
+        max_upload_age_seconds=max_upload_age_seconds,
     )
     # Set here rather than by the supervisor: a task wedged in the watermark
     # lookup has not started working, and must not report itself as working.
@@ -1823,6 +1845,23 @@ async def async_main(config, now_fn=time.time):
         metrics.shutdown_metrics_server()
 
 
+def upload_age_cap_seconds(cfg):
+    """Seconds of history a cold start may archive, or None for no cap.
+
+    With retention configured by days, footage older than that threshold is
+    deleted again by the next prune pass, so re-archiving it would spend
+    Frigate's export time on clips that are already doomed - on a bucket with a
+    long history, on every restart. The cap reads the configured threshold and
+    never the pruner's census, so a camera task behaves the same whether a
+    prune pass has ever run.
+    """
+    import retention
+
+    if not cfg.retention_limit_upload_depth or not cfg.retention_keep_days:
+        return None
+    return retention.HOURS_PER_DAY * int(cfg.retention_keep_days) * 3600
+
+
 async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
     frigate_client_factory = make_frigate_client_factory(
         cfg.frigate_url,
@@ -1851,6 +1890,7 @@ async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
         return 1
 
     log.info("Cameras: %s", ", ".join(cameras))
+    upload_age_cap = upload_age_cap_seconds(cfg)
 
     def start_camera(camera):
         async def supervised():
@@ -1882,6 +1922,7 @@ async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
                     ),
                     max_gap_seconds=cfg.max_gap_seconds,
                     key_prefix=cfg.s3_prefix,
+                    max_upload_age_seconds=upload_age_cap,
                 ),
                 backoff_seconds=cfg.camera_restart_backoff_seconds,
                 backoff_max_seconds=cfg.camera_restart_backoff_max_seconds,
@@ -1890,6 +1931,38 @@ async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
         return asyncio.create_task(supervised(), name=f"supervisor:{camera}")
 
     supervisors = {camera: start_camera(camera) for camera in cameras}
+    supervisors_named = dict(supervisors)
+    if cfg.retention_enabled:
+        # Imported here rather than at module scope: retention_prune needs
+        # archive_census, which needs this module for the key layout, so a
+        # top-level import would be a cycle - the same reason main() imports
+        # config inside the function.
+        import retention_prune
+
+        log.info(
+            "Retention: keep %s, target %s, %s",
+            f"{cfg.retention_keep_days} days"
+            if cfg.retention_keep_days is not None
+            else "no day floor",
+            "not set"
+            if cfg.retention_keep_bytes is None
+            else f"{cfg.retention_keep_bytes / 2**30:.2f} GiB",
+            "DRY RUN - nothing will be deleted"
+            if cfg.retention_dry_run
+            else "deletion enabled",
+        )
+        # A dead prune supervisor is fatal like a camera's: retention that
+        # stopped silently means the bucket grows forever, which no counter
+        # other than the bucket quota itself would reveal.
+        supervisors_named["retention"] = asyncio.create_task(
+            retention_prune.supervise_prune(
+                lambda: retention_prune.run_pruner(
+                    s3_client, cfg, key_timezone, now_fn=now_fn
+                ),
+                interval_seconds=cfg.retention_prune_interval_seconds,
+            ),
+            name="supervisor:retention",
+        )
 
     try:
         # A camera whose task dies is restarted by its own supervisor, so a
@@ -1898,16 +1971,18 @@ async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
         # and the other cameras keep archiving. The process exits only when a
         # supervisor itself dies, which is a bug in the supervisor.
         await asyncio.wait(
-            supervisors.values(), return_when=asyncio.FIRST_EXCEPTION
+            supervisors_named.values(), return_when=asyncio.FIRST_EXCEPTION
         )
     except asyncio.CancelledError:
-        for task in supervisors.values():
+        for task in supervisors_named.values():
             task.cancel()
-        await asyncio.gather(*supervisors.values(), return_exceptions=True)
+        await asyncio.gather(
+            *supervisors_named.values(), return_exceptions=True
+        )
         raise
 
     failures = []
-    for camera, task in supervisors.items():
+    for camera, task in supervisors_named.items():
         if not task.done() or task.cancelled():
             continue
         error = task.exception()
@@ -1918,14 +1993,16 @@ async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
 
     # Everything else keeps running while we report, so a crash of one
     # supervisor does not strand the rest mid-upload.
-    for task in supervisors.values():
+    for task in supervisors_named.values():
         task.cancel()
-    await asyncio.gather(*supervisors.values(), return_exceptions=True)
+    await asyncio.gather(
+        *supervisors_named.values(), return_exceptions=True
+    )
 
     if failures:
         camera, error = failures[0]
         raise RuntimeError(
-            f"The supervisor of camera {camera} exited - "
+            f"The supervisor of {camera} exited - "
             f"this is a supervisor failure, not a camera failure"
         ) from error
 

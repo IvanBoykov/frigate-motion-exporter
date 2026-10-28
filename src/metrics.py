@@ -95,6 +95,81 @@ CAMERA_WATERMARK_TIMESTAMP_SECONDS = Gauge(
     ["camera"],
 )
 
+# ---------------------------------------------------------------- retention
+#
+# Retention is the only part of the archiver that removes data, so its surface
+# is built to answer two different questions separately: what the archive looks
+# like now, and what the next pass intends to do about it.
+
+ARCHIVE_BYTES = Gauge(
+    "archive_bytes",
+    "Bytes stored in S3 for this camera at the last census, floor included",
+    ["camera"],
+)
+ARCHIVE_HORIZON_TIMESTAMP_SECONDS = Gauge(
+    "archive_horizon_timestamp_seconds",
+    "Start of this camera's oldest surviving hour folder after the retention"
+    " plan, i.e. how deep the archive reaches. Reported for a planned pass too,"
+    " so a dry run shows what it would do instead of what already happened",
+    ["camera"],
+)
+RETENTION_DRY_RUN = Gauge(
+    "retention_dry_run",
+    "1 while retention only plans and never deletes. A threshold set with this"
+    " at 1 means deletion is configured but not yet enabled",
+)
+RETENTION_ARCHIVE_BYTES = Gauge(
+    "retention_archive_bytes",
+    "Total bytes under the archive prefix at the last census, including"
+    " foreign keys and the protected floor",
+)
+RETENTION_TARGET_BYTES = Gauge(
+    "retention_target_bytes",
+    "The size retention is steering to: RETENTION_KEEP_BYTES, or 0 when the"
+    " archive is bounded by RETENTION_KEEP_DAYS alone",
+)
+RETENTION_HEADROOM_BYTES = Gauge(
+    "retention_headroom_bytes",
+    "Bytes the archive is expected to gain over one prune interval, which the"
+    " target has to leave room for so a quota-sized bucket still has space to"
+    " write",
+)
+RETENTION_OVER_BUDGET_BYTES = Gauge(
+    "retention_over_budget_bytes",
+    "Bytes by which the archive still exceeds its target after the pass. The"
+    " reason label says why no further deletion happened: floor means the"
+    " protected days cost more than the target allows, percent_cap means the"
+    " per-pass brake stopped it and more will go next pass, foreign_keys means"
+    " a changed S3_PREFIX or S3_KEY_TIMEZONE made the archive unrecognizable"
+    " and the pass refused to delete",
+    ["reason"],
+)
+CLIPS_DELETED_TOTAL = Counter(
+    "clips_deleted_total",
+    "Objects deleted from S3 by retention",
+    ["camera"],
+)
+DELETED_BYTES_TOTAL = Counter(
+    "deleted_bytes_total",
+    "Bytes freed in S3 by retention",
+    ["camera"],
+)
+PRUNE_LAST_SUCCESS_TIMESTAMP_SECONDS = Gauge(
+    "prune_last_success_timestamp_seconds",
+    "Unix time the last prune pass finished without error. It stays flat while"
+    " retention is disabled, so compare it against the process start rather"
+    " than alerting on the value alone",
+)
+PRUNE_FAILURES_TOTAL = Counter(
+    "prune_failures_total",
+    "Prune passes that ended in an error, by error kind",
+    ["kind"],
+)
+PRUNE_IN_PROGRESS = Gauge(
+    "prune_in_progress",
+    "1 while a prune pass is between its census and its last delete",
+)
+
 _metrics_httpd = None
 
 _S3_NETWORK_KINDS = {
@@ -212,6 +287,19 @@ def record_failure(camera, kind):
     if kind not in _ERROR_KINDS:
         raise ValueError(f"unknown error kind: {kind}")
     ERRORS_TOTAL.labels(camera=camera, kind=kind).inc()
+    return kind
+
+
+def record_prune_failure(exc=None):
+    """Count a prune pass that ended early, on its own counter.
+
+    A prune failure deliberately does not touch ERRORS_TOTAL or
+    camera_restarts_total: those series mean "archiving is broken", and a
+    pruner that cannot list its bucket is neither of those things. It shares
+    the error vocabulary so an unclassified kind still stands out.
+    """
+    kind = error_kind(exc) if exc is not None else "unknown"
+    PRUNE_FAILURES_TOTAL.labels(kind=kind).inc()
     return kind
 
 
