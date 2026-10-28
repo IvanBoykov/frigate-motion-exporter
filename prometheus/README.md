@@ -32,8 +32,9 @@ Why these two numbers:
   it, so the worst-case detection latency of the fastest rule is ~4
   minutes. Longer scrape intervals push that latency past the `for` itself
   and make `up == 0` detection a coin flip.
-* Every `for` value in the ruleset (3, 5, 10, 20, 30 minutes) is a whole
-  number of one-minute evaluations, and `alerts-k8s_test.yml` is written
+* Every `for` value in the ruleset (3, 5, 10, 15, 20, 30, 45, 180, 360
+  minutes) is a whole number of one-minute evaluations, and
+  `alerts-k8s_test.yml` is written
   and validated at exactly `interval: 1m` / `evaluation_interval: 1m` -
   the timings the scenario headers claim hold only at this cadence.
   Evaluating faster is harmless (alerts can only fire earlier); evaluating
@@ -54,12 +55,28 @@ Detection latencies at 1 m / 1 m, for reference:
 | WatermarkMovedBackwards | 15 m, no `for` | ~1 min after the step; self-resolves 15 min after it |
 | ClipsArchivedTruncated | 1 h | ~1 min after the first truncation; stays firing for an hour |
 | ArchiveLagHigh | 6 h + 30 m | ~6.5 h behind real time |
+| RetentionFloorExceedsSizeTarget | 15 m | ~15 min |
+| RetentionSeesForeignArchive | 30 m | ~30 min |
+| RetentionCannotReachSizeTarget | 3 h | ~3 h |
+| RetentionPassStuck | 5 m + 45 m | ~45 min into a wedged pass |
+| RetentionNotPruning | 3 h guard + 15 m | 196 min after the last successful pass: the strict `> 3h` first holds at 181 m, the `for` adds 15 |
+| RetentionDeletionEnabled | 6 h | ~6 h after deletion is enabled - info-level, a record rather than a page |
+
+Two boundary rules, both measured rather than reasoned about: a `for` counts
+from the first sample, so a rule true from the very first evaluation fires
+*exactly* at its `for` (15 m, 30 m and 3 h below are the first firing minutes,
+not the last silent ones), and a threshold expressed as a guard inside the
+expression is crossed by the guard before the `for` starts counting. Scenario
+R-S7 is why the retention rules use a short window plus a `for` instead of a
+long window: a partially filled window is evaluated over the samples it has, so
+`min_over_time(x[45m]) == 1` is true one minute into a healthy pass.
 
 ## Tests
 
-`alerts-k8s_test.yml` holds 18 failure/health scenarios (crash-loop with
+`alerts-k8s_test.yml` holds 28 failure/health scenarios (crash-loop with
 kubelet backoff, S3 blackhole wedge, quiet camera, catch-up pass, clock
-skew, prefix switch, ...):
+skew, prefix switch, retention disabled / dry run / wedged pass / foreign
+archive / stopped pruner, ...):
 
 ```sh
 promtool test rules prometheus/alerts-k8s_test.yml
@@ -81,3 +98,18 @@ would fire on a healthy larger deployment. Before reusing the rule, size the
 threshold from your own camera count and part size (the README's peak-RSS table
 is the starting point) rather than adopting 128 MB; the same applies to the
 100-fd half, which assumes a small static camera set.
+
+`RetentionNotPruning` hardcodes 3 hours of staleness, which is four default
+prune intervals (`RETENTION_PRUNE_INTERVAL_SECONDS = 2700`). A deployment that
+sets the interval above ~1 h has to widen the guard with it, or the rule pages
+on a pruner that is running exactly as configured. The same coupling runs the
+other way for `RetentionCannotReachSizeTarget` (3 h): with a long interval, a
+few *healthy* bounded passes on an over-full bucket can look like a sustained
+miss.
+
+Retention rules are also the only ones here that read process-global gauges
+rather than per-camera series: a prune pass describes the whole archive, so
+`retention_*` and `prune_*` carry no `camera` label and one pod's pass says
+nothing about another's. Multi-instance deployments (one exporter per bucket is
+the documented shape, so more than one pod means more than one archive) should
+alert per `instance`, which is what the rules already match on.

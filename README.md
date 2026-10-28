@@ -99,6 +99,10 @@ Requirements:
   foreign objects belong under the archive prefix.
 - **One instance per (bucket, prefix).** Two instances archiving the same camera into
   the same prefix race on the same keys.
+- **`DeleteObject`/`DeleteObjects` are only ever needed once retention is enabled.**
+  With `RETENTION_DRY_RUN=true` (the default) a read-only credential set works; a
+  deployment that never enables deletion can keep the delete permission off the
+  policy entirely, which is the strongest guard against a misconfigured threshold.
 - **Synchronized clocks.** Segment timestamps, clip windows, and key dates all live in
   the Frigate host's clock domain; the script inherits that domain and cannot detect
   its skew. Keep the Frigate host and the archiver host on NTP.
@@ -120,7 +124,13 @@ Guaranteed when those hold:
   never stored as a normal clip; the window is re-fetched, and only an export cut off
   on every attempt is stored, under a `*-truncated.mp4` key whose name declares it.
 - **Camera isolation.** One camera's failure never stops another camera, never kills
-  the process, and never moves another camera's watermark.
+  the process, and never moves another camera's watermark. Retention runs as its own
+  task for the same reason: Frigate being down does not stop deletion, and an S3 that
+  refuses to list does not stop archiving.
+- **Deletion cannot outrun its configuration.** With both retention thresholds unset
+  nothing is ever deleted; with them set, the newest `24 * RETENTION_KEEP_DAYS` hour
+  folders of every camera survive whatever the archive costs, and the archive stays
+  over budget rather than eating into that floor (see *Retention*).
 - **Crash-resumability from the bucket alone.** Any kill signal at any point -
   mid-PUT, mid-multipart, mid-scan - leaves a bucket state covered by the *Crash
   recovery* table; its one accepted loss scenario is documented there.
@@ -212,6 +222,17 @@ startup rather than silently disabling observability.
 | `camera_task_running` | Gauge | `camera` | 1 while the camera task works (watermark resolved); 0 at startup, on a wedged watermark read, during backoff |
 | `camera_motion_intervals_found` | Gauge | `camera` | Intervals returned by the camera's most recent motion-interval search; 0 while the latest search found nothing, stale while the search itself fails |
 | `camera_watermark_timestamp_seconds` | Gauge | `camera` | Unix timestamp of the camera's watermark: footage before it is archived in S3. Set once the watermark read returns, then on every pass that processed intervals - their clips newly stored or already present. Absent while the task is wedged on that read |
+| `archive_bytes` | Gauge | `camera` | Bytes this camera's clips occupy, from the last prune census |
+| `archive_horizon_timestamp_seconds` | Gauge | `camera` | Start of the oldest hour folder the last plan keeps. Describes the *plan*, so a dry run publishes the horizon it would move to - that is what makes a dry run reviewable |
+| `clips_deleted_total` | Counter | `camera` | Keys actually deleted (never incremented by a dry run) |
+| `deleted_bytes_total` | Counter | `camera` | Bytes actually deleted |
+| `retention_dry_run` | Gauge | - | 1 while retention only plans. 0 means deletion is enabled, but only once a pass has run: with retention disabled it sits at its 0 default, so read it with `prune_last_success_timestamp_seconds > 0` |
+| `retention_archive_bytes` / `retention_target_bytes` / `retention_headroom_bytes` | Gauge | - | Archive size, the configured size target, and the growth headroom held back. `retention_target_bytes` is 0 when only `KEEP_DAYS` is set |
+| `retention_unknown_bytes` / `retention_unknown_keys` | Gauge | - | Bytes/keys under the prefix this archiver did not write. Nonzero usually means `S3_PREFIX` or `S3_KEY_TIMEZONE` changed |
+| `retention_over_budget_bytes` | Gauge | `reason` | How far the archive is over target, on the one series naming why the pass stopped: `target_met`, `floor`, `percent_cap`, `foreign_keys`, `headroom`. Only the matching reason is nonzero |
+| `prune_last_success_timestamp_seconds` | Gauge | - | Unix time the last prune pass finished clean. 0 until the first pass and while retention is disabled |
+| `prune_failures_total` | Counter | `kind` | Prune pass failures by error kind. Deliberately separate from `errors_total`, which means "archiving is broken" |
+| `prune_in_progress` | Gauge | - | 1 while a pass runs. Stays 1 through a pass wedged in a worker thread, which no other retention metric can see |
 
 `frigate_response_seconds{kind="json"}` covers the metadata requests
 (`/api/config`, `/api/{camera}/recordings`); `kind="clip_ttfb"` measures the time
@@ -249,6 +270,18 @@ increase(errors_total{kind=~"s3_accessdenied|s3_nosuchbucket"}[5m]) > 0
 
 # Frigate is slow to answer metadata queries
 histogram_quantile(0.95, rate(frigate_response_seconds_bucket{kind="json"}[5m])) > 2
+
+# retention will not fit the protected days (fix the config, not the alert)
+retention_over_budget_bytes{reason="floor"} > 0
+
+# deletion is enabled and running - the standing record of an irreversible setting
+retention_dry_run == 0 and prune_last_success_timestamp_seconds > 0
+
+# a prune pass wedged: busy for 45 m with a completed pass behind it
+min_over_time(prune_in_progress[5m]) == 1 and prune_last_success_timestamp_seconds > 0
+
+# the archive is not what retention thinks it is
+retention_unknown_bytes / retention_archive_bytes > 0.25
 ```
 
 `camera_task_running` answers "is this camera's task doing work right now". The
@@ -423,6 +456,73 @@ point for a camera whose bucket prefix is empty. Because the fallback replaces a
 lookback that failed rather than one that found a recent clip, downtime longer
 than the first window costs re-scanning, not coverage; downtime longer than the
 second costs footage.
+
+### Retention (deleting old footage)
+
+Off by default: with neither threshold set the archiver never deletes anything,
+and an upgrade of an existing deployment changes nothing. Enabling it is two
+decisions - a threshold, and then `RETENTION_DRY_RUN=false`.
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `RETENTION_KEEP_DAYS` | Protected depth per camera. The newest `24 * KEEP_DAYS` hour folders are never deleted, whatever the archive costs. Counts folders that exist, not calendar days since now | unset - no floor |
+| `RETENTION_KEEP_BYTES` | Total archive size to stay under, in bytes. Total-archive size cap; a target above the floor, never a way through it | unset - no size limit |
+| `RETENTION_GROWTH_HEADROOM_BYTES` | New footage to leave room for between passes, so a pass does not delete what the next hour archives. Estimated from the archive's own growth when unset | unset - estimated |
+| `RETENTION_PRUNE_INTERVAL_SECONDS` | Seconds between prune passes | `2700` |
+| `RETENTION_MAX_DELETE_PERCENT` | Largest share of the archive one pass may delete. `100` disables the brake | `25` |
+| `RETENTION_MAX_UNKNOWN_FRACTION` | Refuse to delete at all when more than this fraction of the bytes under the prefix is keys this archiver did not write | `0.5` |
+| `RETENTION_DRY_RUN` | Plan, log and publish metrics without deleting. `false` is the only setting that removes objects | `true` |
+| `RETENTION_LIMIT_UPLOAD_DEPTH` | Cap a cold start's depth at `KEEP_DAYS`, so a restart does not re-archive footage the next pass deletes | `true` |
+
+Two configurations are refused at startup rather than discovered at runtime,
+because both can only produce a surprise: `RETENTION_KEEP_BYTES` without
+`RETENTION_KEEP_DAYS` (nothing would bound age at all, so one mistyped digit in
+the byte count walks the archive to its newest hour), and
+`RETENTION_KEEP_DAYS=0` (a request to empty the bucket, expressed as a
+threshold).
+
+**The two thresholds are not alternatives at the same level.** `KEEP_DAYS` is a
+floor and `KEEP_BYTES` is a target above it, and the floor wins: if the
+protected days cost more than the target allows, the pass deletes everything it
+may, leaves the archive over budget, and reports
+`retention_over_budget_bytes{reason="floor"}`. A size target therefore cannot
+empty the bucket; the way to lose footage is to delete the floor by setting
+`KEEP_DAYS` too low, which nothing can protect you from.
+
+`KEEP_DAYS` counts what exists rather than what passed by. Thirty days protects
+the newest 720 hour folders the camera actually has, so a camera that recorded
+no motion for a week keeps its footage instead of losing it on a date rule - and
+a camera that stopped recording a year ago keeps 30 days of a year-old archive,
+which is the intended reading.
+
+**Depth stays even across cameras.** Deletion is one oldest-hour-first sweep
+over every camera's hour folders at the same time, not a per-camera budget. An
+hour disappears from one camera only where every camera holding that hour loses
+it too, so the horizons advance together - verified against a real two-camera
+archive, where a dry run planned ~40 GiB and both cameras'
+`archive_horizon_timestamp_seconds` landed in the same hour. A camera whose
+recordings stopped long ago loses its tail first and alone, which is what
+"delete the oldest recordings" means; equal bytes per camera is not the goal.
+
+Protections against a bad pass, each independent:
+
+- deletion is a dry run until you turn it off;
+- one pass frees at most `RETENTION_MAX_DELETE_PERCENT` of the archive;
+- hours newer than the sweep, plus the growth estimate, are left alone even
+  when the target is already missed;
+- the executor deletes exactly the planned keys, re-lists before each batch,
+  and refuses to start if the prefix no longer looks like the census that
+  planned against;
+- above `RETENTION_MAX_UNKNOWN_FRACTION` of foreign-looking bytes the pass
+  deletes nothing at all - the state a changed `S3_PREFIX` or
+  `S3_KEY_TIMEZONE` produces, where a healthy archive has become unreadable as
+  ours.
+
+The reason a pass stopped where it did is reported, never guessed at:
+`target_met`, `floor`, `percent_cap`, `foreign_keys`, or `headroom` (a target so
+small that even the newest hours could not fit it, which means the byte count is
+wrong). A pass that cannot list its bucket deletes nothing and raises; the
+supervisor backs off and retries, and archiving is unaffected either way.
 
 ### Memory and resource sizing
 

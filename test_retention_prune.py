@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 import archive_census
 import frigate_s3_archiver as archiver
+from test_frigate_s3_archiver import frigate_server
 import metrics
 import retention
 import retention_prune as rp
@@ -341,3 +342,121 @@ class TestUploadDepthCap:
         # lookback. Neither equals the clip start, so this distinguishes all
         # three branches and proves the resume path is the one taken.
         assert start == float(expected)
+
+
+class LoggedFakeS3(FakeS3):
+    """The runtime path both registers a botocore retry hook and logs the
+    endpoint, so the double needs the events registrar and the two meta fields
+    that log reads - the plain FakeS3 has only the first."""
+
+    class _Events:
+        @staticmethod
+        def register(event_name, handler):
+            pass
+
+    class _ClientMeta:
+        endpoint_url = "https://s3.test.internal"
+        region_name = "us-east-1"
+        events = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._meta = LoggedFakeS3._ClientMeta()
+        self._meta.events = LoggedFakeS3._Events()
+
+    @property
+    def meta(self):
+        return self._meta
+
+
+class TestRuntimeWiring:
+    """The prune task must be started by the loop that starts the camera tasks,
+    with the config's thresholds and the age cap threaded through. Unit tests
+    of run_prune_pass cannot show that the wiring exists."""
+
+    def drive(self, monkeypatch, frigate_server, extra_env):
+        import asyncio
+        from config import load_config
+        import retention_prune as rp
+
+        cameras = {}
+        pruners = []
+
+        async def fake_run_camera(camera, **kwargs):
+            cameras[camera] = kwargs
+            await asyncio.Event().wait()
+
+        async def fake_run_pruner(s3_client, config, key_timezone, now_fn=None):
+            pruners.append(config)
+            await asyncio.Event().wait()
+
+        env = {
+            "FRIGATE_URL": frigate_server,
+            "S3_BUCKET": "bucket",
+            "FRIGATE_USER": "",
+            "FRIGATE_PASSWORD": "",
+            "METRICS_PORT": "0",
+            **extra_env,
+        }
+        monkeypatch.setattr(
+            archiver.boto3,
+            "client",
+            lambda name, **kw: LoggedFakeS3(),
+        )
+        monkeypatch.setattr(archiver, "run_camera", fake_run_camera)
+        monkeypatch.setattr(rp, "run_pruner", fake_run_pruner)
+
+        async def scenario(cfg):
+            task = asyncio.create_task(
+                archiver.async_main(config=cfg, now_fn=lambda: NOW_TS)
+            )
+            for _ in range(400):
+                if cameras and (
+                    not cfg.retention_enabled or pruners
+                ):
+                    break
+                await asyncio.sleep(0.01)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        cfg = load_config(environ=env)
+        asyncio.run(scenario(cfg))
+        return cameras, pruners
+
+    def test_retention_starts_a_prune_task(self, monkeypatch, frigate_server):
+        cameras, pruners = self.drive(
+            monkeypatch,
+            frigate_server,
+            {"RETENTION_KEEP_DAYS": "7"},
+        )
+        assert set(cameras) == {"cam_a", "cam_b"}
+        assert len(pruners) == 1
+        assert pruners[0].retention_keep_days == 7
+
+    def test_no_retention_starts_no_prune_task(self, monkeypatch, frigate_server):
+        cameras, pruners = self.drive(monkeypatch, frigate_server, {})
+        assert set(cameras) == {"cam_a", "cam_b"}
+        assert pruners == []
+
+    def test_the_age_cap_reaches_every_camera_task(
+        self, monkeypatch, frigate_server
+    ):
+        """KEEP_DAYS must reach the camera tasks, not just the pruner: the cap
+        is what keeps a cold restart from re-archiving what deletion removes."""
+        cameras, _ = self.drive(
+            monkeypatch,
+            frigate_server,
+            {"RETENTION_KEEP_DAYS": "7"},
+        )
+        for kwargs in cameras.values():
+            assert kwargs["max_upload_age_seconds"] == 7 * 24 * 3600
+
+    def test_the_age_cap_is_absent_without_retention(
+        self, monkeypatch, frigate_server
+    ):
+        cameras, _ = self.drive(monkeypatch, frigate_server, {})
+        for kwargs in cameras.values():
+            assert kwargs["max_upload_age_seconds"] is None

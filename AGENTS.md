@@ -89,9 +89,26 @@ names by path throughout, so treat them all as load-bearing.
   Two settings deliberately bypass it: `METRICS_PORT`/`METRICS_BIND` are read by
   `src/metrics.py` at bind time, and `make_frigate_client` falls back to
   `FRIGATE_USER`/`FRIGATE_PASSWORD` when called without explicit credentials.
+- `src/archive_census.py` - one full listing of the archive prefix, reduced to
+  per-camera per-hour-folder totals (bytes/keys) plus the foreign-key residue,
+  with memory bounded by cameras x hours rather than clip count. Nothing else
+  lists the bucket; retention and the prune pass both consume its census.
+- `src/retention.py` - the deletion *planner*: pure, no S3, no clock. Takes a
+  census plus the thresholds and returns which hour folders leave, never which
+  objects. Owns the retention `DEFAULT_*` constants (config imports them from
+  here, the same one-direction rule the archiver's constants follow).
+- `src/retention_delete.py` - the deletion *executor*: deletes exactly the keys
+  the plan names, re-listing before each batch and refusing to start when the
+  prefix no longer matches the census the plan was built against. No policy.
+- `src/retention_prune.py` - ties census -> plan -> delete together on a
+  schedule, owns the prune supervisor/backoff, and is the only module that calls
+  `metrics` for retention. Deliberately does not import
+  `frigate_s3_archiver` (the archiver imports it, so that edge would be a
+  cycle); its backoff helper is its own `restart_delay`.
 - `conftest.py` - puts `src/` on `sys.path` for the test suite.
 - `test_frigate_s3_archiver.py`, `test_logging_setup.py`, `test_metrics.py`,
-  `test_mp4_tail.py`, `test_config.py` - see *Tests*.
+  `test_mp4_tail.py`, `test_config.py`, `test_retention.py`,
+  `test_retention_prune.py` - see *Tests*.
 - `Dockerfile` - two-stage build (`python:3.14-slim`): dependencies into an
   isolated prefix, then `src/` copied into `/app` and owned by the
   non-privileged `appuser` the container runs as.
@@ -280,6 +297,53 @@ duration comparison produces false truncations. A final box that reaches EOF is 
 trustworthy signal, which is what `test_mp4_tail.py` pins (including a final box chopped
 at every byte length).
 
+## Retention
+
+Deletion is planned from a census and executed against the plan, in two modules
+that share no code path, because the dangerous failure mode of a retention
+feature is a planner bug reaching the bucket.
+
+- The **floor** (`KEEP_DAYS`) and the **target** (`KEEP_BYTES`) are not peers.
+  `KEEP_DAYS` protects the newest `24 * KEEP_DAYS` hour folders of every camera
+  and the census excludes them from its candidate map, so no plan - including a
+  wrong one - can name them. `KEEP_BYTES` governs only what is below the floor;
+  when the floor cannot fit the target the planner reports an over-budget state
+  instead of deleting harder. Do not "simplify" this into one threshold.
+- **Hour folders are the unit.** Not days, not objects: the key layout already
+  buckets time at one-hour granularity, so the deletion unit is the same unit
+  the watermark parses, and `parse_s3_clip_start` keeps advancing past a deleted
+  folder because the *next* surviving folder still yields a start.
+- **`KEEP_DAYS` counts folders, not elapsed days.** A camera with no motion for
+  a week keeps what it has; a date-based rule would delete footage the operator
+  asked to keep. An empty archive has no floor either - it has nothing to
+  protect, and inventing a floor from `now()` would promise retention of footage
+  that does not exist.
+- **One global oldest-hour-first sweep**, not a per-camera budget. That is what
+  keeps depth even: an hour leaves one camera only where every camera holding it
+  loses it. A camera that stopped recording loses its tail first, which is the
+  correct reading of "oldest first" and not a fairness bug.
+- **`now()` is never called in the planner.** Every time comes from a key, so
+  clock skew cannot move a deletion boundary. The same rule holds the loader's
+  cold-start cap: `upload_age_cap_seconds(cfg)` derives depth from config alone,
+  never from a prune pass's view of the bucket, so a slow or dead pruner cannot
+  slow archiving down or change what a camera uploads.
+- Three brakes sit between a wrong threshold and an empty bucket: dry-run by
+  default, `MAX_DELETE_PERCENT` per pass, and growth headroom (hours newer than
+  the sweep plus the estimated growth of one interval are left alone even when
+  the target is already missed). A misconfigured headroom reports
+  `reason="headroom"`, and `keep_bytes=0` is refused at config time so that
+  branch cannot be reached by a blank setting.
+- **Foreign keys stop the pass.** Above `MAX_UNKNOWN_FRACTION` of unknown bytes
+  nothing is deleted: a changed `S3_PREFIX`/`S3_KEY_TIMEZONE` makes a whole
+  healthy archive look foreign, and that is precisely when deletion must not
+  run. `retention_unknown_bytes`/`_keys` make the state visible; the alert tells
+  you to fix the setting rather than raise the fraction.
+- The prune task is supervised like a camera task but **a dead prune supervisor
+  is fatal**, because retention that stopped silently means unbounded growth and
+  no counter except the quota itself would reveal it. Its failures report on
+  `prune_failures_total`, never `errors_total`/`camera_restarts_total`: those
+  mean "archiving is broken", which a pruner that cannot list its bucket is not.
+
 ## Metrics
 
 `metrics.py` owns the exporter; the archiver only calls into it. Everything is on the
@@ -317,6 +381,29 @@ process-global `prometheus_client` registry, and `async_main` binds `METRICS_POR
   request. Consequence: the first scrape after a restart may show 0 for a healthy
   camera; that is the honest reading, and `camera_restarts_total` distinguishes it
   from a stalled one.
+- `archive_bytes{camera}`, `archive_horizon_timestamp_seconds{camera}` - the
+  census view: occupancy, and the oldest hour the *plan* keeps. The horizon is
+  published for a dry run too and describes the plan rather than the bucket, so
+  a dry run is reviewable; a gauge still reporting the footage a plan intends to
+  delete leaves nothing to review against.
+- `clips_deleted_total{camera}`, `deleted_bytes_total{camera}` - counted where
+  the delete succeeded, so a dry run never increments them (that is what makes
+  "deletion happened" distinguishable from "deletion was planned").
+- `retention_dry_run`, `retention_archive_bytes`, `retention_target_bytes`,
+  `retention_headroom_bytes`, `retention_unknown_bytes`,
+  `retention_unknown_keys` - the pass's own view. `retention_dry_run` sits at its
+  0 default while retention is disabled, so "0" alone does not mean deletion is
+  on; it has to be read with `prune_last_success_timestamp_seconds > 0`.
+- `retention_over_budget_bytes{reason}` - one series per stop reason
+  (`target_met`/`floor`/`percent_cap`/`foreign_keys`/`headroom`), only the
+  matching one nonzero. The reason is not decoration: `floor` means the
+  configuration is impossible, `percent_cap` means the schedule is too slow, and
+  the fix is different.
+- `prune_last_success_timestamp_seconds`, `prune_failures_total{kind}`,
+  `prune_in_progress` - the pruner's heartbeat. `prune_in_progress` is the only
+  signal for a pass wedged inside `to_thread`, where nothing else moves: the
+  heartbeat is not yet stale, no failure is counted, no counter changes.
+
 - `camera_watermark_timestamp_seconds{camera}` - the watermark the task actually
   holds, i.e. how far the archive reaches. Set by `run_camera` next to
   `camera_task_running`, once the watermark read returns, and again after each pass
@@ -444,6 +531,22 @@ existed (so an existing bucket keeps resuming), and build/parse round-trip only
 inside one layout, which is what makes a changed `S3_PREFIX` show up as an empty
 watermark lookup rather than a wrong one.
 
+`test_retention.py`: the planner and the census against a fake S3 that lists
+and deletes for real (within the double) - floor arithmetic over hour folders,
+the global sweep's fairness, percent-cap and headroom behavior, every stop
+reason, the foreign-byte guard refusing a whole-prefix delete, and the
+executor refusing to delete a key the plan did not name. Camera names are
+unique per test because the prometheus registry is process-global.
+
+`test_retention_prune.py`: the pass, its supervisor, and what it publishes -
+dry run deleting nothing while still reporting the horizon it would move to,
+convergence on the floor over repeated passes without a third pass eating
+further in, a census failure deleting nothing and counting
+`s3_<code>`, `prune_in_progress` returning to 0 after a failure, backoff
+saturating, cancellation not being retried, and the cold-start depth cap being
+config-derived (a resume is never clamped, which is what separates the three
+watermark branches).
+
 `test_logging_setup.py`: the logging layer - level parsing (the documented
 spellings, `WARN` included, and an invented level refused), a level filtering what
 reaches the stream, `configure_logging` replacing its previous handler rather than
@@ -473,6 +576,27 @@ letting the OS pick an ephemeral port - because `async_main` binds a real port a
 fixed 9108 default would collide with a previous run of the suite (or a running
 archiver). One test pins the other half of that: the listener is closed on the
 signal-stop path, so it does not outlive the run.
+
+## Retention and the watermark
+
+Deletion and the watermark read the same keys and cannot corrupt each other:
+
+- A watermark is a clip *start*; deleting an old folder moves the oldest clip,
+  and the watermark derives from whatever the listing still finds. Deleting
+  footage older than the watermark therefore just moves the resume point
+  forward, which is the point.
+- Retention only ever deletes footage the archive already holds, so it can never
+  create a hole the watermark would skip over: a hole means footage Frigate
+  never exported, and retention never reaches newer than the floor.
+- A camera whose bucket contents are entirely gone reads as a cold start on its
+  next watermark lookup. The floor makes that unreachable through retention
+  (deletion never reaches newer than it, and an archive smaller than the floor
+  loses nothing), so it means a bucket-side change - a new prefix, manual
+  deletion. Cold start is then `now - FIRST_RUN_LOOKBACK`, moved *forward* by
+  `upload_age_cap_seconds`, never backward: the cap only ever raises the start.
+- Cold resume is a clip start, so a resume after deletion can re-scan an already
+  archived folder; `head_object` skips those. Deletion cannot make that cheaper
+  or more expensive, only shorter.
 
 ## Frigate API assumptions (verified against Frigate 0.17 sources)
 
