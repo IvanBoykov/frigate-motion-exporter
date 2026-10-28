@@ -309,11 +309,23 @@ feature is a planner bug reaching the bucket.
   wrong one - can name them. `KEEP_BYTES` governs only what is below the floor;
   when the floor cannot fit the target the planner reports an over-budget state
   instead of deleting harder. Do not "simplify" this into one threshold.
+- **`KEEP_DAYS=0` is a threshold, not an absent one.** It means "no day floor"
+  and is legal only next to a size target; `retention_keep_days is None` is the
+  absent case. Every read of it must distinguish `0` from `None` - a truthiness
+  test silently turns "no floor" into "no cap", which is exactly the `0 or 0`
+  bug `upload_age_cap_seconds` had. With no floor the residual floor is each
+  camera's newest hour (`_candidate_rows`), so `reason="floor"` can still fire
+  with `KEEP_DAYS=0`: the archive cannot shrink below one hour per camera.
 - **Hour folders are the unit.** Not days, not objects: the key layout already
   buckets time at one-hour granularity, so the deletion unit is the same unit
   the watermark parses, and `parse_s3_clip_start` keeps advancing past a deleted
   folder because the *next* surviving folder still yields a start.
-- **`KEEP_DAYS` counts folders, not elapsed days.** A camera with no motion for
+- **Validation belongs to config, and reads `retention_dry_run` to do it.**
+  Deletion enabled (`RETENTION_DRY_RUN=false`) with no threshold is a startup
+  error; the same unset thresholds with deletion disabled are simply "retention
+  off", because that is the state an upgrade of an existing deployment lands in.
+  `KEEP_BYTES` without `KEEP_DAYS` stays an error even though `0` is legal -
+  `0` is the explicit answer, an unset variable is not. A camera with no motion for
   a week keeps what it has; a date-based rule would delete footage the operator
   asked to keep. An empty archive has no floor either - it has nothing to
   protect, and inventing a floor from `now()` would promise retention of footage

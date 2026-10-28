@@ -286,20 +286,30 @@ class TestUploadDepthCap:
     def test_no_retention_means_no_cap(self):
         assert archiver.upload_age_cap_seconds(self.cfg()) is None
 
-    def test_bytes_only_retention_leaves_the_cap_alone(self):
-        """Without a day threshold there is no age below which re-archiving is
-        pointless, so the loader must keep its full lookback."""
+    def test_a_size_target_does_not_move_the_cap(self):
+        """The cap is a depth, so only the day threshold can set it; the byte
+        target says what the archive may weigh, not how far a restart looks."""
         cfg = self.cfg(
             RETENTION_KEEP_DAYS=30, RETENTION_KEEP_BYTES=1024**3
         )
 
         assert archiver.upload_age_cap_seconds(cfg) == 30 * 24 * 3600
+
+    def test_the_cap_can_be_switched_off(self):
         cfg_off = self.cfg(
             RETENTION_KEEP_DAYS=30,
             RETENTION_KEEP_BYTES=1024**3,
             RETENTION_LIMIT_UPLOAD_DEPTH="false",
         )
+
         assert archiver.upload_age_cap_seconds(cfg_off) is None
+
+    def test_no_day_floor_means_no_cap(self):
+        """KEEP_DAYS=0 asks for no age floor, so nothing a cold start archives
+        is doomed and the loader keeps its full FIRST_RUN_LOOKBACK_SECONDS."""
+        cfg = self.cfg(RETENTION_KEEP_DAYS=0, RETENTION_KEEP_BYTES=1024**3)
+
+        assert archiver.upload_age_cap_seconds(cfg) is None
 
     def test_a_cold_start_clamped_by_the_cap_reports_the_cap(self):
         s3 = FakeS3()

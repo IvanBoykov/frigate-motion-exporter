@@ -98,32 +98,49 @@ def _bytes(environ, name, minimum=None):
 def _retention(environ):
     """Parse and cross-check the retention knobs.
 
-    Two rules are refused here rather than discovered at runtime, because both
-    describe a configuration whose effect can only be surprising:
+    Retention is off when neither threshold is set, and off means the prune
+    task is never started. ``RETENTION_KEEP_DAYS=0`` is a legal threshold that
+    means "no day floor" - the operator allowed keeping less than a day - and
+    the only thing left holding the archive back is the size target plus the
+    newest hour folder of every camera, which the census never offers.
 
-    - ``RETENTION_KEEP_BYTES`` without ``RETENTION_KEEP_DAYS`` leaves the
-      archive with no age limit at all, so one mistyped digit in the byte
-      target would walk the archive down to its newest hour over a few passes.
-    - ``RETENTION_KEEP_DAYS=0`` means "keep no day", which is a request to
-      empty the bucket expressed as a threshold.
+    Three combinations are refused here rather than discovered at runtime,
+    because each describes a configuration whose effect can only be surprising:
+
+    - deletion enabled (``RETENTION_DRY_RUN=false``) with no threshold at all:
+      the operator asked for removals but never said what to keep.
+    - ``RETENTION_KEEP_BYTES`` without ``RETENTION_KEEP_DAYS``: a size target
+      alone has no age limit, and the day threshold is the one place the age
+      bound is stated. ``0`` is the explicit way to say "no floor"; an unset
+      variable is not.
+    - a negative day count, which is not a threshold.
     """
     keep_days = _number(
         environ, "RETENTION_KEEP_DAYS", None, int, minimum=None
     )
     keep_bytes = _bytes(environ, "RETENTION_KEEP_BYTES", minimum=1)
+    dry_run = _flag(environ, "RETENTION_DRY_RUN", True)
 
+    if keep_days is not None and keep_days < 0:
+        raise ConfigError(
+            "RETENTION_KEEP_DAYS",
+            f"must be >= 0; {keep_days} is not a depth. 0 means no day floor",
+        )
     if keep_bytes is not None and keep_days is None:
         raise ConfigError(
             "RETENTION_KEEP_DAYS",
             "RETENTION_KEEP_DAYS is required when RETENTION_KEEP_BYTES is"
-            " set: a size target alone leaves no age limit, so one wrong"
-            " digit would delete the archive down to its newest hour",
+            " set. Set it to the depth you want protected, or to 0 for no day"
+            " floor (size alone then decides, down to each camera's newest"
+            " hour)",
         )
-    if keep_days is not None and keep_days < 1:
+    if not dry_run and keep_days is None and keep_bytes is None:
         raise ConfigError(
-            "RETENTION_KEEP_DAYS",
-            "must be >= 1; 0 would keep no day at all. Leave both retention"
-            " thresholds unset to disable deletion",
+            "RETENTION_DRY_RUN",
+            "RETENTION_DRY_RUN=false enables deletion, but no threshold is"
+            " configured - set RETENTION_KEEP_DAYS or RETENTION_KEEP_BYTES"
+            " first. Leaving RETENTION_DRY_RUN at its default true keeps"
+            " retention planning only",
         )
 
     percent = _number(

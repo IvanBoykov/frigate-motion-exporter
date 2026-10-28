@@ -271,12 +271,15 @@ groups:
           severity: warning
         annotations:
           summary: >-
-            The protected days cannot fit the size target
+            The protected footage cannot fit the size target
           description: >-
-            KEEP_DAYS protects more bytes than KEEP_BYTES allows, so retention
-            deletes everything it may and the archive remains over budget
-            forever. Raise KEEP_BYTES or lower KEEP_DAYS. No footage is being
-            deleted that should not be - the opposite is the problem.
+            The footage retention is not allowed to delete weighs more than
+            KEEP_BYTES allows, so a pass removes everything it may and the
+            archive stays over budget. With KEEP_DAYS set the protected days are
+            that floor; with KEEP_DAYS=0 it is the newest hour folder of every
+            camera, and only more cameras or a larger target move it. Raise
+            KEEP_BYTES, or lower KEEP_DAYS where that is what you meant. Nothing
+            is being deleted that should not be - the opposite is the problem.
 
       # R2. The per-pass brake is still limiting deletion after hours. Expected
       # for a few passes when retention is first enabled on an over-full bucket

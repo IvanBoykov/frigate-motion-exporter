@@ -385,11 +385,38 @@ class TestRetention:
         assert message.startswith("RETENTION_KEEP_DAYS:")
         assert "RETENTION_KEEP_BYTES" in message
 
-    @pytest.mark.parametrize("value", [0, -1])
-    def test_keeping_no_day_is_refused(self, value):
-        message = error_variable(RETENTION_KEEP_DAYS=value)
+    def test_keeping_no_day_is_a_legal_threshold(self):
+        """0 is the explicit way to ask for no day floor: size alone decides,
+        down to the newest hour folder each camera owns."""
+        cfg = load(RETENTION_KEEP_DAYS=0, RETENTION_KEEP_BYTES=10 * 1024**3)
+
+        assert cfg.retention_keep_days == 0
+        assert cfg.retention_enabled is True
+
+    def test_negative_depth_is_refused(self):
+        message = error_variable(RETENTION_KEEP_DAYS=-1)
 
         assert message.startswith("RETENTION_KEEP_DAYS:")
+
+    def test_deletion_without_any_threshold_is_refused(self):
+        """dry_run=false is the operator asking for removals; with no threshold
+        there is no answer to what should survive."""
+        message = error_variable(RETENTION_DRY_RUN="false")
+
+        assert message.startswith("RETENTION_DRY_RUN:")
+        assert "RETENTION_KEEP_DAYS" in message
+
+    def test_dry_run_without_any_threshold_is_off_not_broken(self):
+        """The same missing thresholds are fine while deletion stays disabled -
+        that is the state an upgrade of an existing deployment lands in."""
+        cfg = load(RETENTION_DRY_RUN="true")
+
+        assert cfg.retention_enabled is False
+
+    def test_deletion_enabled_with_days_only_is_accepted(self):
+        cfg = load(RETENTION_KEEP_DAYS=30, RETENTION_DRY_RUN="false")
+
+        assert cfg.retention_keep_days == 30
 
     def test_days_may_be_smaller_than_the_headroom_allows(self):
         """A day threshold alone is a legitimate configuration: the archive is

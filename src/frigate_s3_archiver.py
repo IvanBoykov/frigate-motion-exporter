@@ -1854,12 +1854,18 @@ def upload_age_cap_seconds(cfg):
     long history, on every restart. The cap reads the configured threshold and
     never the pruner's census, so a camera task behaves the same whether a
     prune pass has ever run.
+
+    ``RETENTION_KEEP_DAYS=0`` - no day floor - means no cap either: nothing is
+    doomed, so a cold start scans its full ``FIRST_RUN_LOOKBACK_SECONDS``.
     """
     import retention
 
-    if not cfg.retention_limit_upload_depth or not cfg.retention_keep_days:
+    if not cfg.retention_limit_upload_depth:
         return None
-    return retention.HOURS_PER_DAY * int(cfg.retention_keep_days) * 3600
+    keep_days = cfg.retention_keep_days
+    if keep_days is None or keep_days <= 0:
+        return None
+    return retention.HOURS_PER_DAY * int(keep_days) * 3600
 
 
 async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
@@ -1939,11 +1945,17 @@ async def _run_cameras(cfg, s3_bucket, key_timezone, now_fn):
         # config inside the function.
         import retention_prune
 
+        keep_days = cfg.retention_keep_days
+        depth = (
+            "no day floor"
+            if keep_days is None
+            else "0 days - only each camera's newest hour is protected"
+            if keep_days == 0
+            else f"{keep_days} days"
+        )
         log.info(
             "Retention: keep %s, target %s, %s",
-            f"{cfg.retention_keep_days} days"
-            if cfg.retention_keep_days is not None
-            else "no day floor",
+            depth,
             "not set"
             if cfg.retention_keep_bytes is None
             else f"{cfg.retention_keep_bytes / 2**30:.2f} GiB",

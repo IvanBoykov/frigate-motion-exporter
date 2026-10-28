@@ -465,7 +465,7 @@ decisions - a threshold, and then `RETENTION_DRY_RUN=false`.
 
 | Variable | Meaning | Default |
 | --- | --- | --- |
-| `RETENTION_KEEP_DAYS` | Protected depth per camera. The newest `24 * KEEP_DAYS` hour folders are never deleted, whatever the archive costs. Counts folders that exist, not calendar days since now | unset - no floor |
+| `RETENTION_KEEP_DAYS` | Protected depth per camera. The newest `24 * KEEP_DAYS` hour folders are never deleted, whatever the archive costs. Counts folders that exist, not calendar days since now. `0` means no day floor - size alone decides, down to each camera's newest hour | unset - required by `KEEP_BYTES`, or by `RETENTION_DRY_RUN=false` |
 | `RETENTION_KEEP_BYTES` | Total archive size to stay under, in bytes. Total-archive size cap; a target above the floor, never a way through it | unset - no size limit |
 | `RETENTION_GROWTH_HEADROOM_BYTES` | New footage to leave room for between passes, so a pass does not delete what the next hour archives. Estimated from the archive's own growth when unset | unset - estimated |
 | `RETENTION_PRUNE_INTERVAL_SECONDS` | Seconds between prune passes | `2700` |
@@ -474,20 +474,34 @@ decisions - a threshold, and then `RETENTION_DRY_RUN=false`.
 | `RETENTION_DRY_RUN` | Plan, log and publish metrics without deleting. `false` is the only setting that removes objects | `true` |
 | `RETENTION_LIMIT_UPLOAD_DEPTH` | Cap a cold start's depth at `KEEP_DAYS`, so a restart does not re-archive footage the next pass deletes | `true` |
 
-Two configurations are refused at startup rather than discovered at runtime,
-because both can only produce a surprise: `RETENTION_KEEP_BYTES` without
-`RETENTION_KEEP_DAYS` (nothing would bound age at all, so one mistyped digit in
-the byte count walks the archive to its newest hour), and
-`RETENTION_KEEP_DAYS=0` (a request to empty the bucket, expressed as a
-threshold).
+Three configurations are refused at startup rather than discovered at runtime,
+because each can only produce a surprise: `RETENTION_DRY_RUN=false` with
+neither threshold (deletion was asked for but nothing was said about what
+should survive), `RETENTION_KEEP_BYTES` without `RETENTION_KEEP_DAYS` (the day
+threshold is where the age bound is stated - `0` is the explicit way to say "no
+floor", an unset variable is not), and a negative `KEEP_DAYS`.
+
+An unset `KEEP_DAYS` alongside an unset `KEEP_BYTES` is *not* an error while
+deletion stays disabled: that is the state an upgrade lands in, and no retention
+code runs at all.
+
+`RETENTION_KEEP_DAYS=0` is a legal threshold meaning "no day floor" - you
+allowed keeping less than a day. What survives is then decided by size alone,
+down to the newest hour folder of every camera, which the census never offers
+for deletion. A cold start keeps its full `FIRST_RUN_LOOKBACK_SECONDS` in that
+mode: nothing it archives is doomed, so the `KEEP_DAYS` depth cap does not
+apply.
 
 **The two thresholds are not alternatives at the same level.** `KEEP_DAYS` is a
 floor and `KEEP_BYTES` is a target above it, and the floor wins: if the
-protected days cost more than the target allows, the pass deletes everything it
-may, leaves the archive over budget, and reports
+protected footage costs more than the target allows, the pass deletes everything
+it may, leaves the archive over budget, and reports
 `retention_over_budget_bytes{reason="floor"}`. A size target therefore cannot
-empty the bucket; the way to lose footage is to delete the floor by setting
-`KEEP_DAYS` too low, which nothing can protect you from.
+empty the bucket; the way to lose footage is to set `KEEP_DAYS` too low, which
+nothing can protect you from. With `KEEP_DAYS=0` the floor is the newest hour of
+each camera, so the smallest archive a target can ask for is roughly "one hour
+per camera" - below that the same alert fires, and only a larger target or fewer
+cameras move it.
 
 `KEEP_DAYS` counts what exists rather than what passed by. Thirty days protects
 the newest 720 hour folders the camera actually has, so a camera that recorded
