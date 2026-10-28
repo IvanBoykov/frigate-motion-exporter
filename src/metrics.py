@@ -115,8 +115,10 @@ ARCHIVE_HORIZON_TIMESTAMP_SECONDS = Gauge(
 )
 RETENTION_DRY_RUN = Gauge(
     "retention_dry_run",
-    "1 while retention only plans and never deletes. A threshold set with this"
-    " at 1 means deletion is configured but not yet enabled",
+    "1 while retention only plans and never deletes. 0 means deletion is"
+    " enabled only once a prune pass has run - with retention disabled this"
+    " gauge sits at its 0 default, so read it together with"
+    " prune_last_success_timestamp_seconds > 0",
 )
 RETENTION_ARCHIVE_BYTES = Gauge(
     "retention_archive_bytes",
@@ -127,6 +129,19 @@ RETENTION_TARGET_BYTES = Gauge(
     "retention_target_bytes",
     "The size retention is steering to: RETENTION_KEEP_BYTES, or 0 when the"
     " archive is bounded by RETENTION_KEEP_DAYS alone",
+)
+RETENTION_UNKNOWN_BYTES = Gauge(
+    "retention_unknown_bytes",
+    "Bytes under the archive prefix whose keys this archiver did not write."
+    " A nonzero value normally means S3_PREFIX or S3_KEY_TIMEZONE changed and"
+    " the existing archive now looks foreign to it; above"
+    " RETENTION_MAX_UNKNOWN_FRACTION the pass refuses to delete anything",
+)
+RETENTION_UNKNOWN_KEYS = Gauge(
+    "retention_unknown_keys",
+    "Count of keys under the archive prefix that this archiver did not write"
+    " - one hand-placed export and a misread whole archive are different"
+    " problems with the same byte count",
 )
 RETENTION_HEADROOM_BYTES = Gauge(
     "retention_headroom_bytes",
@@ -156,9 +171,9 @@ DELETED_BYTES_TOTAL = Counter(
 )
 PRUNE_LAST_SUCCESS_TIMESTAMP_SECONDS = Gauge(
     "prune_last_success_timestamp_seconds",
-    "Unix time the last prune pass finished without error. It stays flat while"
-    " retention is disabled, so compare it against the process start rather"
-    " than alerting on the value alone",
+    "Unix time the last prune pass finished without error. It is 0 until the"
+    " first pass has run and stays at 0 while retention is disabled, so a"
+    " staleness check has to require it to be > 0 rather than merely old",
 )
 PRUNE_FAILURES_TOTAL = Counter(
     "prune_failures_total",

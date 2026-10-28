@@ -258,6 +258,119 @@ groups:
             for "now" to catch up. ArchiveLagHigh sees a negative lag and
             stays silent. Check time synchronization on the Frigate host.
 
+      # R1. Retention is configured and running, but the protected days cost
+      # more than the size target allows, so the archive stays permanently over
+      # budget. No pass can fix this by deleting - the floor is what it is - and
+      # the pruner is healthy, so this is not a stall: only a configuration
+      # change resolves it. A misconfigured headroom reports reason="headroom"
+      # instead and never reaches this rule.
+      - alert: RetentionFloorExceedsSizeTarget
+        expr: retention_over_budget_bytes{reason="floor"} > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            The protected days cannot fit the size target
+          description: >-
+            KEEP_DAYS protects more bytes than KEEP_BYTES allows, so retention
+            deletes everything it may and the archive remains over budget
+            forever. Raise KEEP_BYTES or lower KEEP_DAYS. No footage is being
+            deleted that should not be - the opposite is the problem.
+
+      # R2. The per-pass brake is still limiting deletion after hours. Expected
+      # for a few passes when retention is first enabled on an over-full bucket
+      # - that is the brake working as designed - but sustained it means growth
+      # outpaces what the cap releases each interval.
+      - alert: RetentionCannotReachSizeTarget
+        expr: retention_over_budget_bytes{reason="percent_cap"} > 0
+        for: 3h
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            Retention is still over its size target after hours of passes
+          description: >-
+            RETENTION_MAX_DELETE_PERCENT keeps stopping the sweep before the
+            target. For a few passes that is the brake working; for hours the
+            configuration cannot drain the growth. Raise the percent or the
+            prune interval.
+
+      # R3. A prune pass wedged. to_thread cannot interrupt a running thread, so
+      # prune_in_progress stays 1 through a pass stuck on an S3 that answers
+      # listings slowly or not at all - the one retention state no other metric
+      # reports, since the heartbeat only goes stale an interval later and no
+      # counter moves at all.
+      #
+      # min_over_time over a short window plus for:, not max_over_time over a
+      # long one: max == 1 reads "was busy at some point in the window", true a
+      # minute into a normal pass, and a long window does not delay the alert
+      # either - a partially filled window is evaluated over the samples it has,
+      # so min == 1 is already true early. The `for` is what makes the 45 m
+      # mean 45 m, as elsewhere in this file.
+      - alert: RetentionPassStuck
+        expr: |
+          min_over_time(prune_in_progress[5m]) == 1
+          and on(instance)
+          (prune_last_success_timestamp_seconds > 0)
+        for: 45m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            A retention pass has held the lock for 45 minutes
+          description: >-
+            A prune pass is wedged, almost certainly on an S3 that answers
+            listings slowly or not at all. Nothing is deleted while this holds;
+            archiving continues unaffected.
+
+      # R4. A large share of the archive does not parse as ours. This is the one
+      # retention state where continuing to delete would be the dangerous
+      # direction, so the alert says the guard is holding and a setting is
+      # wrong: a changed S3_PREFIX or S3_KEY_TIMEZONE makes a whole healthy
+      # archive look foreign.
+      - alert: RetentionSeesForeignArchive
+        expr: |
+          (
+            retention_unknown_bytes
+            / clamp_min(retention_archive_bytes, 1) > 0.25
+          )
+          and on(instance)
+          (prune_last_success_timestamp_seconds > 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            A quarter of the archive is keys this exporter did not write
+          description: >-
+            Usually a changed S3_PREFIX or S3_KEY_TIMEZONE, which makes the
+            existing archive stop parsing as ours. Retention refuses to delete
+            above RETENTION_MAX_UNKNOWN_FRACTION, so nothing is lost by this -
+            fix the setting instead of raising the fraction.
+
+      # R5. Retention ran and stopped pruning. Silent retention means unbounded
+      # growth, which nothing else reveals until the quota fills. Guarded on > 0
+      # because the heartbeat sits at 0 while retention is disabled, and that is
+      # not a fault.
+      - alert: RetentionNotPruning
+        expr: |
+          (
+            time() - prune_last_success_timestamp_seconds > 3 * 3600
+          )
+          and on(instance)
+          (prune_last_success_timestamp_seconds > 0)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            No successful retention pass in over 3 hours
+          description: >-
+            Retention ran at some point and stopped succeeding. Check
+            prune_failures_total for the kind and the process log for the pass.
+            The archive keeps growing while this holds.
+
       - alert: CameraInDeepBackoff
         expr: camera_consecutive_failures >= 5
         for: 5m
@@ -301,6 +414,25 @@ groups:
             Growing fds mean sessions that are never closed; memory grows with
             the number of cameras at work (a part-size buffer per camera). An
             OOM kill is only visible later, in ProcessRestartLoop.
+
+      # R6. Deletion is enabled and a pass has completed, so footage really is
+      # being removed. Not a fault: the standing record of the one irreversible
+      # setting, and the answer to "which process deleted last month".
+      - alert: RetentionDeletionEnabled
+        expr: |
+          retention_dry_run == 0
+          and on(instance)
+          (prune_last_success_timestamp_seconds > 0)
+        for: 6h
+        labels:
+          severity: info
+        annotations:
+          summary: >-
+            Retention is deleting (not a dry run) on this exporter
+          description: >-
+            RETENTION_DRY_RUN is false and a pass has completed, so old hour
+            folders are being removed on schedule. Confirm this is intended -
+            no alert fires for the deletions themselves.
 
   # One root cause must not page three times. AccessDenied on the watermark
   # listing produces PermanentConfigRejection at once, ArchiveTaskWedgedOrDead

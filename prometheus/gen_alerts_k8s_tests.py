@@ -138,6 +138,14 @@ RULE_LABELS = {
     "UnclassifiedErrorKind": lambda cam, inst: {"camera": cam, "instance": inst,
                                                 "kind": "unknown"},
     "ExporterResourceHigh": lambda cam, inst: {"instance": inst},
+    "RetentionFloorExceedsSizeTarget": lambda cam, inst: {"instance": inst,
+                                                          "reason": "floor"},
+    "RetentionCannotReachSizeTarget": lambda cam, inst: {"instance": inst,
+                                                         "reason": "percent_cap"},
+    "RetentionPassStuck": lambda cam, inst: {"instance": inst},
+    "RetentionSeesForeignArchive": lambda cam, inst: {"instance": inst},
+    "RetentionNotPruning": lambda cam, inst: {"instance": inst},
+    "RetentionDeletionEnabled": lambda cam, inst: {"instance": inst},
 }
 
 ALL = ["FrigateMotionExporterDown", "FrigateMotionExporterUnscrapeable",
@@ -145,7 +153,58 @@ ALL = ["FrigateMotionExporterDown", "FrigateMotionExporterUnscrapeable",
        "FootageLostInFrigate", "PermanentConfigRejection", "NoFrigateQueries",
        "ProcessRestartLoop", "ClipsArchivedTruncated", "WatermarkMovedBackwards",
        "CameraInDeepBackoff", "UnclassifiedErrorKind", "ExporterResourceHigh",
-       "WatermarkInFuture"]
+       "WatermarkInFuture", "RetentionFloorExceedsSizeTarget",
+       "RetentionCannotReachSizeTarget", "RetentionPassStuck",
+       "RetentionSeesForeignArchive", "RetentionNotPruning",
+       "RetentionDeletionEnabled"]
+
+RETENTION_ALERTS = [
+    "RetentionFloorExceedsSizeTarget", "RetentionCannotReachSizeTarget",
+    "RetentionPassStuck", "RetentionSeesForeignArchive",
+    "RetentionNotPruning", "RetentionDeletionEnabled",
+]
+
+FLOOR = 53 * 2**30
+
+
+def retention(n, dry=1, over_floor=0, over_cap=0, in_progress=0,
+              heartbeat="track", unknown=0, total=180 * 2**30, inst=INST_A):
+    """Series a run_prune_pass produces.
+
+    Values mirror what set_census_metrics writes: every retention gauge carries
+    only the scrape labels and prune_last_success is an absolute unix time, so
+    "track" makes it advance with the scrape clock (a pass just completed, age
+    0) while any other value is the literal series - a constant negative reads
+    as a pruner that stopped that long before the test began.
+    """
+    beat = f"0+60x{n}" if heartbeat == "track" else heartbeat
+    return [
+        s("retention_dry_run", f"{dry}x{n}", camera=None, instance=inst),
+        s("retention_archive_bytes", f"{total}x{n}", camera=None, instance=inst),
+        s("retention_target_bytes", f"{150 * 2**30}x{n}", camera=None,
+          instance=inst),
+        s("retention_headroom_bytes", "209715200x" + str(n), camera=None,
+          instance=inst),
+        s("retention_unknown_bytes", f"{unknown}x{n}", camera=None, instance=inst),
+        s("retention_unknown_keys", f"{unknown // 1000}x{n}", camera=None,
+          instance=inst),
+        s("retention_over_budget_bytes", f"{over_floor}x{n}", camera=None,
+          instance=inst, reason="floor"),
+        s("retention_over_budget_bytes", f"{over_cap}x{n}", camera=None,
+          instance=inst, reason="percent_cap"),
+        s("retention_over_budget_bytes", "0x" + str(n), camera=None,
+          instance=inst, reason="target_met"),
+        s("retention_over_budget_bytes", "0x" + str(n), camera=None,
+          instance=inst, reason="foreign_keys"),
+        s("retention_over_budget_bytes", "0x" + str(n), camera=None,
+          instance=inst, reason="headroom"),
+        s("prune_in_progress", f"{in_progress}x{n}", camera=None, instance=inst),
+        s("prune_last_success_timestamp_seconds", beat, camera=None,
+          instance=inst),
+        s("archive_bytes", f"{total // 2}x{n}", camera=CAM, instance=inst),
+        s("archive_horizon_timestamp_seconds", "-86400x" + str(n), camera=CAM,
+          instance=inst),
+    ]
 
 
 def build():
@@ -504,7 +563,124 @@ def build():
                                        "FrigateMotionExporterUnscrapeable"],
                       fired)))
 
+    # --- retention rules -------------------------------------------------
+
+    lines = healthy(60, cams=(CAM,)) + [
+        s("retention_dry_run", "0x60", camera=None),
+        s("prune_last_success_timestamp_seconds", "0x60", camera=None),
+    ]
+    fired = {(t, a): [] for t in ["5m", "30m", "59m"] for a in RETENTION_ALERTS}
+    sc.append(("R-S1 retention DISABLED: dry_run sits at its 0 default and the"
+               " heartbeat at 0 because no pass ever ran. Every retention rule"
+               " is guarded against exactly this - an unconfigured archive must"
+               " not page, and 'deletion enabled' must not read the 0 default as"
+               " a decision.",
+               lines,
+               checks(["5m", "30m", "59m"], RETENTION_ALERTS, fired)))
+
+    lines = healthy(600, cams=(CAM,)) + retention(600, dry=1, heartbeat="track")
+    fired = {("30m", "RetentionDeletionEnabled"): [],
+             ("400m", "RetentionDeletionEnabled"): [],
+             ("599m", "RetentionDeletionEnabled"): []}
+    sc.append(("R-S2 dry run with deletion configured: the horizon and the"
+               " budget gauges are published so the plan is reviewable, but no"
+               " 'deletion enabled' signal - dry_run is 1 and every guard holds.",
+               lines,
+               checks(["30m", "400m", "599m"], RETENTION_ALERTS, fired)))
+
+    lines = healthy(620, cams=(CAM,)) + retention(620, dry=0, heartbeat="track")
+    fired = {("360m", "RetentionDeletionEnabled"): [],
+             ("361m", "RetentionDeletionEnabled"): [({}, None)],
+             ("500m", "RetentionNotPruning"): [],
+             ("500m", "RetentionDeletionEnabled"): [({}, None)]}
+    sc.append(("R-S3 deletion enabled and pruning: the info-level reminder"
+               " fires at its 6h, and the heartbeat staleness rule stays silent"
+               " because each pass refreshes it - the guard that would otherwise"
+               " page every healthy pruner between passes.",
+               lines,
+               checks(["359m", "360m", "500m"], RETENTION_ALERTS, fired)))
+
+    lines = healthy(60, cams=(CAM,)) + retention(
+        60, dry=0, over_floor=FLOOR, heartbeat="track")
+    fired = {("14m", "RetentionFloorExceedsSizeTarget"): [],
+             ("15m", "RetentionFloorExceedsSizeTarget"): [({}, None)],
+             ("15m", "RetentionCannotReachSizeTarget"): [],
+             ("15m", "RetentionPassStuck"): []}
+    sc.append(("R-S4 the protected days cost more than the target allows: R1"
+               " fires at its 15m, and the percent-cap rule stays silent because"
+               " the two over-budget reasons are separate series - a floor miss"
+               " is a config change, a cap miss is a schedule change.",
+               lines,
+               checks(["14m", "15m"], RETENTION_ALERTS, fired)))
+
+    lines = healthy(240, cams=(CAM,)) + retention(
+        240, dry=0, over_cap=8 * 2**30, heartbeat="track")
+    fired = {("179m", "RetentionCannotReachSizeTarget"): [],
+             ("180m", "RetentionCannotReachSizeTarget"): [({}, None)],
+             ("180m", "RetentionFloorExceedsSizeTarget"): []}
+    sc.append(("R-S5 the per-pass brake is the limiter: silent through its 3h"
+               " (a few bounded passes on an over-full bucket are the brake"
+               " working), then fires.",
+               lines,
+               checks(["179m", "180m"], RETENTION_ALERTS, fired)))
+
+    lines = healthy(120, cams=(CAM,)) + retention(
+        120, dry=0, in_progress=1, heartbeat="track")
+    fired = {("45m", "RetentionPassStuck"): [],
+             ("46m", "RetentionPassStuck"): [({}, None)]}
+    sc.append(("R-S6 a prune pass wedged inside to_thread: prune_in_progress"
+               " holds at 1, the heartbeat is fresh, and no counter moves. This"
+               " is the state only prune_in_progress can see.",
+               lines,
+               checks(["45m", "46m"], ["RetentionPassStuck"], fired)))
+
+    lines = healthy(120, cams=(CAM,)) + retention(120, dry=0, heartbeat="track")
+    lines = replace_series(
+        lines, "prune_in_progress",
+        s("prune_in_progress", "0x10 1x2 0x108", camera=None))
+    fired = {("15m", "RetentionPassStuck"): [], ("60m", "RetentionPassStuck"): [],
+             ("119m", "RetentionPassStuck"): []}
+    sc.append(("R-S7 a NORMAL pass that takes 2 minutes: in_progress goes 1 and"
+               " back to 0. Without the 45m `for`, min_over_time over a"
+               " partially filled window reads true early and every healthy pass"
+               " would page.",
+               lines,
+               checks(["15m", "60m", "119m"], ["RetentionPassStuck"], fired)))
+
+    lines = healthy(90, cams=(CAM,)) + retention(
+        90, dry=0, heartbeat="track", unknown=int(0.30 * 180 * 2**30))
+    fired = {("30m", "RetentionSeesForeignArchive"): [],
+             ("31m", "RetentionSeesForeignArchive"): [({}, None)]}
+    sc.append(("R-S8 a third of the prefix does not parse as ours (a changed"
+               " S3_PREFIX): the rule fires while the guard in build_plan is"
+               " refusing to delete, so the alert means 'fix the setting', not"
+               " 'data is being lost'.",
+               lines,
+               checks(["30m", "31m"], ["RetentionSeesForeignArchive"], fired)))
+
+    lines = healthy(90, cams=(CAM,)) + retention(
+        90, dry=0, heartbeat="track", unknown=int(0.02 * 180 * 2**30))
+    fired = {("31m", "RetentionSeesForeignArchive"): [],
+             ("89m", "RetentionSeesForeignArchive"): []}
+    sc.append(("R-S9 a little foreign data (2%): deletion keeps working. The"
+               " rule must not turn a hand-placed export into a page.",
+               lines,
+               checks(["31m", "89m"], ["RetentionSeesForeignArchive"], fired)))
+
+    # The test clock starts at 0, so "last success 5 s after startup, never
+    # again" is the stale-but-ran shape: a value of 0 would read as "retention
+    # disabled" and correctly stay silent instead.
+    lines = healthy(220, cams=(CAM,)) + retention(220, dry=0, heartbeat="5x220")
+    fired = {("195m", "RetentionNotPruning"): [],
+             ("196m", "RetentionNotPruning"): [({}, None)]}
+    sc.append(("R-S10 the pruner stopped: one pass at startup, then nothing. The"
+               " age crosses the 3 h guard at 181m and the alert fires 15m later."
+               " Retention that stopped silently means unbounded growth.",
+               lines,
+               checks(["195m", "196m"], ["RetentionNotPruning"], fired)))
+
     return sc
+
 
 
 def main():

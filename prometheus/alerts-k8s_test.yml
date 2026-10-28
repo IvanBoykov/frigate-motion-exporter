@@ -93,6 +93,24 @@ tests:
       - eval_time: 119m
         alertname: WatermarkInFuture
         exp_alerts: []
+      - eval_time: 119m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
       - eval_time: 182m
         alertname: FrigateMotionExporterDown
         exp_alerts: []
@@ -138,6 +156,24 @@ tests:
       - eval_time: 182m
         alertname: WatermarkInFuture
         exp_alerts: []
+      - eval_time: 182m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 182m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
       - eval_time: 186m
         alertname: FrigateMotionExporterDown
         exp_alerts: []
@@ -183,6 +219,24 @@ tests:
       - eval_time: 186m
         alertname: WatermarkInFuture
         exp_alerts: []
+      - eval_time: 186m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 186m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
       - eval_time: 190m
         alertname: FrigateMotionExporterDown
         exp_alerts: []
@@ -228,6 +282,24 @@ tests:
       - eval_time: 190m
         alertname: WatermarkInFuture
         exp_alerts: []
+      - eval_time: 190m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
       - eval_time: 240m
         alertname: FrigateMotionExporterDown
         exp_alerts: []
@@ -273,6 +345,24 @@ tests:
       - eval_time: 240m
         alertname: WatermarkInFuture
         exp_alerts: []
+      - eval_time: 240m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
       - eval_time: 719m
         alertname: FrigateMotionExporterDown
         exp_alerts: []
@@ -317,6 +407,24 @@ tests:
         exp_alerts: []
       - eval_time: 719m
         alertname: WatermarkInFuture
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: RetentionDeletionEnabled
         exp_alerts: []
 
   # S2 pod deleted/never scheduled: no target, hence no up series. Unscrapeable fires; up==0 stays silent - the hole the absent_over_time arm closes.
@@ -1166,3 +1274,850 @@ tests:
       - eval_time: 20m
         alertname: FrigateMotionExporterUnscrapeable
         exp_alerts: []
+
+  # R-S1 retention DISABLED: dry_run sits at its 0 default and the heartbeat at 0 because no pass ever ran. Every retention rule is guarded against exactly this - an unconfigured archive must not page, and 'deletion enabled' must not read the 0 default as a decision.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x60"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x60"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x60"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x60"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x59"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x60"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x60"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x60"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x60"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x60"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x60"
+      - series: retention_dry_run{instance="10.128.0.18:9108"}
+        values: "0x60"
+      - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
+        values: "0x60"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
+
+  # R-S2 dry run with deletion configured: the horizon and the budget gauges are published so the plan is reviewable, but no 'deletion enabled' signal - dry_run is 1 and every guard holds.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x600"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x600"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x600"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x600"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x599"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x600"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x600"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x600"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x600"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x600"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x600"
+      - series: retention_dry_run{instance="10.128.0.18:9108"}
+        values: "1x600"
+      - series: retention_archive_bytes{instance="10.128.0.18:9108"}
+        values: "193273528320x600"
+      - series: retention_target_bytes{instance="10.128.0.18:9108"}
+        values: "161061273600x600"
+      - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
+        values: "209715200x600"
+      - series: retention_unknown_bytes{instance="10.128.0.18:9108"}
+        values: "0x600"
+      - series: retention_unknown_keys{instance="10.128.0.18:9108"}
+        values: "0x600"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="floor"}
+        values: "0x600"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="percent_cap"}
+        values: "0x600"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="target_met"}
+        values: "0x600"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="foreign_keys"}
+        values: "0x600"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="headroom"}
+        values: "0x600"
+      - series: prune_in_progress{instance="10.128.0.18:9108"}
+        values: "0x600"
+      - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
+        values: "0+60x600"
+      - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "96636764160x600"
+      - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-86400x600"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
+      - eval_time: 400m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 400m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 400m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 400m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 400m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 400m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
+      - eval_time: 599m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 599m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 599m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 599m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 599m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 599m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
+
+  # R-S3 deletion enabled and pruning: the info-level reminder fires at its 6h, and the heartbeat staleness rule stays silent because each pass refreshes it - the guard that would otherwise page every healthy pruner between passes.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x620"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x620"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x620"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x620"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x619"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x620"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x620"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x620"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x620"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x620"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x620"
+      - series: retention_dry_run{instance="10.128.0.18:9108"}
+        values: "0x620"
+      - series: retention_archive_bytes{instance="10.128.0.18:9108"}
+        values: "193273528320x620"
+      - series: retention_target_bytes{instance="10.128.0.18:9108"}
+        values: "161061273600x620"
+      - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
+        values: "209715200x620"
+      - series: retention_unknown_bytes{instance="10.128.0.18:9108"}
+        values: "0x620"
+      - series: retention_unknown_keys{instance="10.128.0.18:9108"}
+        values: "0x620"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="floor"}
+        values: "0x620"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="percent_cap"}
+        values: "0x620"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="target_met"}
+        values: "0x620"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="foreign_keys"}
+        values: "0x620"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="headroom"}
+        values: "0x620"
+      - series: prune_in_progress{instance="10.128.0.18:9108"}
+        values: "0x620"
+      - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
+        values: "0+60x620"
+      - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "96636764160x620"
+      - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-86400x620"
+    alert_rule_test:
+      - eval_time: 359m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 359m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 359m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 359m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 359m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 359m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
+      - eval_time: 360m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 360m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 360m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 360m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 360m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 360m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
+      - eval_time: 500m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 500m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 500m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 500m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 500m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 500m
+        alertname: RetentionDeletionEnabled
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              severity: "info"
+            exp_annotations:
+              summary: "Retention is deleting (not a dry run) on this exporter"
+              description: "RETENTION_DRY_RUN is false and a pass has completed, so old hour folders are being removed on schedule. Confirm this is intended - no alert fires for the deletions themselves."
+
+  # R-S4 the protected days cost more than the target allows: R1 fires at its 15m, and the percent-cap rule stays silent because the two over-budget reasons are separate series - a floor miss is a config change, a cap miss is a schedule change.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x60"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x60"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x60"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x60"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x59"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x60"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x60"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x60"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x60"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x60"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x60"
+      - series: retention_dry_run{instance="10.128.0.18:9108"}
+        values: "0x60"
+      - series: retention_archive_bytes{instance="10.128.0.18:9108"}
+        values: "193273528320x60"
+      - series: retention_target_bytes{instance="10.128.0.18:9108"}
+        values: "161061273600x60"
+      - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
+        values: "209715200x60"
+      - series: retention_unknown_bytes{instance="10.128.0.18:9108"}
+        values: "0x60"
+      - series: retention_unknown_keys{instance="10.128.0.18:9108"}
+        values: "0x60"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="floor"}
+        values: "56908316672x60"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="percent_cap"}
+        values: "0x60"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="target_met"}
+        values: "0x60"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="foreign_keys"}
+        values: "0x60"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="headroom"}
+        values: "0x60"
+      - series: prune_in_progress{instance="10.128.0.18:9108"}
+        values: "0x60"
+      - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
+        values: "0+60x60"
+      - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "96636764160x60"
+      - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-86400x60"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              reason: "floor"
+              severity: "warning"
+            exp_annotations:
+              summary: "The protected days cannot fit the size target"
+              description: "KEEP_DAYS protects more bytes than KEEP_BYTES allows, so retention deletes everything it may and the archive remains over budget forever. Raise KEEP_BYTES or lower KEEP_DAYS. No footage is being deleted that should not be - the opposite is the problem."
+      - eval_time: 15m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
+
+  # R-S5 the per-pass brake is the limiter: silent through its 3h (a few bounded passes on an over-full bucket are the brake working), then fires.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x240"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x240"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x240"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x240"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x239"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x240"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x240"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x240"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x240"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x240"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x240"
+      - series: retention_dry_run{instance="10.128.0.18:9108"}
+        values: "0x240"
+      - series: retention_archive_bytes{instance="10.128.0.18:9108"}
+        values: "193273528320x240"
+      - series: retention_target_bytes{instance="10.128.0.18:9108"}
+        values: "161061273600x240"
+      - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
+        values: "209715200x240"
+      - series: retention_unknown_bytes{instance="10.128.0.18:9108"}
+        values: "0x240"
+      - series: retention_unknown_keys{instance="10.128.0.18:9108"}
+        values: "0x240"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="floor"}
+        values: "0x240"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="percent_cap"}
+        values: "8589934592x240"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="target_met"}
+        values: "0x240"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="foreign_keys"}
+        values: "0x240"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="headroom"}
+        values: "0x240"
+      - series: prune_in_progress{instance="10.128.0.18:9108"}
+        values: "0x240"
+      - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
+        values: "0+60x240"
+      - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "96636764160x240"
+      - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-86400x240"
+    alert_rule_test:
+      - eval_time: 179m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 179m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts: []
+      - eval_time: 179m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 179m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 179m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 179m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
+      - eval_time: 180m
+        alertname: RetentionFloorExceedsSizeTarget
+        exp_alerts: []
+      - eval_time: 180m
+        alertname: RetentionCannotReachSizeTarget
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              reason: "percent_cap"
+              severity: "warning"
+            exp_annotations:
+              summary: "Retention is still over its size target after hours of passes"
+              description: "RETENTION_MAX_DELETE_PERCENT keeps stopping the sweep before the target. For a few passes that is the brake working; for hours the configuration cannot drain the growth. Raise the percent or the prune interval."
+      - eval_time: 180m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 180m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 180m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 180m
+        alertname: RetentionDeletionEnabled
+        exp_alerts: []
+
+  # R-S6 a prune pass wedged inside to_thread: prune_in_progress holds at 1, the heartbeat is fresh, and no counter moves. This is the state only prune_in_progress can see.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x120"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x120"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x120"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x120"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x119"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x120"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x120"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x120"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x120"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x120"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x120"
+      - series: retention_dry_run{instance="10.128.0.18:9108"}
+        values: "0x120"
+      - series: retention_archive_bytes{instance="10.128.0.18:9108"}
+        values: "193273528320x120"
+      - series: retention_target_bytes{instance="10.128.0.18:9108"}
+        values: "161061273600x120"
+      - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
+        values: "209715200x120"
+      - series: retention_unknown_bytes{instance="10.128.0.18:9108"}
+        values: "0x120"
+      - series: retention_unknown_keys{instance="10.128.0.18:9108"}
+        values: "0x120"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="floor"}
+        values: "0x120"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="percent_cap"}
+        values: "0x120"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="target_met"}
+        values: "0x120"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="foreign_keys"}
+        values: "0x120"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="headroom"}
+        values: "0x120"
+      - series: prune_in_progress{instance="10.128.0.18:9108"}
+        values: "1x120"
+      - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
+        values: "0+60x120"
+      - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "96636764160x120"
+      - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-86400x120"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 46m
+        alertname: RetentionPassStuck
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              severity: "warning"
+            exp_annotations:
+              summary: "A retention pass has held the lock for 45 minutes"
+              description: "A prune pass is wedged, almost certainly on an S3 that answers listings slowly or not at all. Nothing is deleted while this holds; archiving continues unaffected."
+
+  # R-S7 a NORMAL pass that takes 2 minutes: in_progress goes 1 and back to 0. Without the 45m `for`, min_over_time over a partially filled window reads true early and every healthy pass would page.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x120"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x120"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x120"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x120"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x119"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x120"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x120"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x120"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x120"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x120"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x120"
+      - series: retention_dry_run{instance="10.128.0.18:9108"}
+        values: "0x120"
+      - series: retention_archive_bytes{instance="10.128.0.18:9108"}
+        values: "193273528320x120"
+      - series: retention_target_bytes{instance="10.128.0.18:9108"}
+        values: "161061273600x120"
+      - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
+        values: "209715200x120"
+      - series: retention_unknown_bytes{instance="10.128.0.18:9108"}
+        values: "0x120"
+      - series: retention_unknown_keys{instance="10.128.0.18:9108"}
+        values: "0x120"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="floor"}
+        values: "0x120"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="percent_cap"}
+        values: "0x120"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="target_met"}
+        values: "0x120"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="foreign_keys"}
+        values: "0x120"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="headroom"}
+        values: "0x120"
+      - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "96636764160x120"
+      - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-86400x120"
+      - series: prune_in_progress{instance="10.128.0.18:9108"}
+        values: "0x10 1x2 0x108"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+      - eval_time: 119m
+        alertname: RetentionPassStuck
+        exp_alerts: []
+
+  # R-S8 a third of the prefix does not parse as ours (a changed S3_PREFIX): the rule fires while the guard in build_plan is refusing to delete, so the alert means 'fix the setting', not 'data is being lost'.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x90"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x90"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x90"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x90"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x89"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x90"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x90"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x90"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x90"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x90"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x90"
+      - series: retention_dry_run{instance="10.128.0.18:9108"}
+        values: "0x90"
+      - series: retention_archive_bytes{instance="10.128.0.18:9108"}
+        values: "193273528320x90"
+      - series: retention_target_bytes{instance="10.128.0.18:9108"}
+        values: "161061273600x90"
+      - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
+        values: "209715200x90"
+      - series: retention_unknown_bytes{instance="10.128.0.18:9108"}
+        values: "57982058496x90"
+      - series: retention_unknown_keys{instance="10.128.0.18:9108"}
+        values: "57982058x90"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="floor"}
+        values: "0x90"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="percent_cap"}
+        values: "0x90"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="target_met"}
+        values: "0x90"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="foreign_keys"}
+        values: "0x90"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="headroom"}
+        values: "0x90"
+      - series: prune_in_progress{instance="10.128.0.18:9108"}
+        values: "0x90"
+      - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
+        values: "0+60x90"
+      - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "96636764160x90"
+      - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-86400x90"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              severity: "warning"
+            exp_annotations:
+              summary: "A quarter of the archive is keys this exporter did not write"
+              description: "Usually a changed S3_PREFIX or S3_KEY_TIMEZONE, which makes the existing archive stop parsing as ours. Retention refuses to delete above RETENTION_MAX_UNKNOWN_FRACTION, so nothing is lost by this - fix the setting instead of raising the fraction."
+
+  # R-S9 a little foreign data (2%): deletion keeps working. The rule must not turn a hand-placed export into a page.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x90"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x90"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x90"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x90"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x89"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x90"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x90"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x90"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x90"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x90"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x90"
+      - series: retention_dry_run{instance="10.128.0.18:9108"}
+        values: "0x90"
+      - series: retention_archive_bytes{instance="10.128.0.18:9108"}
+        values: "193273528320x90"
+      - series: retention_target_bytes{instance="10.128.0.18:9108"}
+        values: "161061273600x90"
+      - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
+        values: "209715200x90"
+      - series: retention_unknown_bytes{instance="10.128.0.18:9108"}
+        values: "3865470566x90"
+      - series: retention_unknown_keys{instance="10.128.0.18:9108"}
+        values: "3865470x90"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="floor"}
+        values: "0x90"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="percent_cap"}
+        values: "0x90"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="target_met"}
+        values: "0x90"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="foreign_keys"}
+        values: "0x90"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="headroom"}
+        values: "0x90"
+      - series: prune_in_progress{instance="10.128.0.18:9108"}
+        values: "0x90"
+      - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
+        values: "0+60x90"
+      - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "96636764160x90"
+      - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-86400x90"
+    alert_rule_test:
+      - eval_time: 31m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+      - eval_time: 89m
+        alertname: RetentionSeesForeignArchive
+        exp_alerts: []
+
+  # R-S10 the pruner stopped: one pass at startup, then nothing. The age crosses the 3 h guard at 181m and the alert fires 15m later. Retention that stopped silently means unbounded growth.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x220"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x220"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x220"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x220"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x219"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x220"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x220"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x220"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x220"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x220"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x220"
+      - series: retention_dry_run{instance="10.128.0.18:9108"}
+        values: "0x220"
+      - series: retention_archive_bytes{instance="10.128.0.18:9108"}
+        values: "193273528320x220"
+      - series: retention_target_bytes{instance="10.128.0.18:9108"}
+        values: "161061273600x220"
+      - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
+        values: "209715200x220"
+      - series: retention_unknown_bytes{instance="10.128.0.18:9108"}
+        values: "0x220"
+      - series: retention_unknown_keys{instance="10.128.0.18:9108"}
+        values: "0x220"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="floor"}
+        values: "0x220"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="percent_cap"}
+        values: "0x220"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="target_met"}
+        values: "0x220"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="foreign_keys"}
+        values: "0x220"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="headroom"}
+        values: "0x220"
+      - series: prune_in_progress{instance="10.128.0.18:9108"}
+        values: "0x220"
+      - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
+        values: "5x220"
+      - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "96636764160x220"
+      - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-86400x220"
+    alert_rule_test:
+      - eval_time: 195m
+        alertname: RetentionNotPruning
+        exp_alerts: []
+      - eval_time: 196m
+        alertname: RetentionNotPruning
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              severity: "warning"
+            exp_annotations:
+              summary: "No successful retention pass in over 3 hours"
+              description: "Retention ran at some point and stopped succeeding. Check prune_failures_total for the kind and the process log for the pass. The archive keeps growing while this holds."

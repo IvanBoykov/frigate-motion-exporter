@@ -119,6 +119,8 @@ def set_census_metrics(census, plan, dry_run):
         0 if plan.target_bytes is None else plan.target_bytes
     )
     metrics.RETENTION_HEADROOM_BYTES.set(plan.headroom_bytes)
+    metrics.RETENTION_UNKNOWN_BYTES.set(census.unknown_bytes)
+    metrics.RETENTION_UNKNOWN_KEYS.set(census.unknown_keys)
 
     for camera, stat in census.cameras.items():
         metrics.ARCHIVE_BYTES.labels(camera=camera).set(stat.bytes)
