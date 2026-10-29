@@ -512,3 +512,63 @@ class TestDSTKeyZones:
         # cheaply, so instead pin the complement directly: UTC+3 (Russia, no
         # DST since 2014) and a half-hour-DST zone prove both directions.
         assert not timezone_collapses_hours(ZoneInfo("Asia/Kolkata"), 2026)
+
+
+class TestBackfillWindow:
+    """A backfill is a manual bulk write; its configuration is checked for
+    the shapes that can only end badly, the same way retention's is."""
+
+    def test_unset_bounds_run_the_normal_loop(self):
+        cfg = load()
+
+        assert cfg.backfill_after is None
+        assert cfg.backfill_before is None
+        assert cfg.backfill_enabled is False
+
+    def test_a_full_window_parses_both_bound_forms(self):
+        cfg = load(BACKFILL_AFTER=1759291200, BACKFILL_BEFORE="2026-10-01T00:00:00Z")
+
+        assert cfg.backfill_after == 1759291200.0
+        assert cfg.backfill_before == 1790812800.0
+        assert cfg.backfill_enabled is True
+
+    def test_only_one_bound_names_the_missing_variable(self):
+        message = error_variable(BACKFILL_AFTER=100)
+
+        assert message.startswith("BACKFILL_BEFORE:")
+
+    def test_an_empty_or_inverted_window_is_refused(self):
+        message = error_variable(BACKFILL_AFTER=200, BACKFILL_BEFORE=100)
+
+        assert message.startswith("BACKFILL_AFTER")
+
+        message_equal = error_variable(BACKFILL_AFTER=100, BACKFILL_BEFORE=100)
+
+        assert message_equal.startswith("BACKFILL_AFTER")
+
+    def test_an_unparsable_bound_names_its_variable(self):
+        message = error_variable(BACKFILL_AFTER="last tuesday", BACKFILL_BEFORE=100)
+
+        assert message.startswith("BACKFILL_AFTER:")
+
+    def test_backfill_plus_enabled_deletion_is_refused(self):
+        """Whichever order one process ran them in, the prune pass judged a
+        state the fill was about to change; the modes are separate runs."""
+        message = error_variable(
+            BACKFILL_AFTER=100,
+            BACKFILL_BEFORE=200,
+            RETENTION_KEEP_DAYS=7,
+            RETENTION_DRY_RUN="false",
+        )
+
+        assert message.startswith("RETENTION_DRY_RUN")
+
+    def test_backfill_with_dry_run_retention_is_allowed(self):
+        cfg = load(
+            BACKFILL_AFTER=100,
+            BACKFILL_BEFORE=200,
+            RETENTION_KEEP_DAYS=7,
+        )
+
+        assert cfg.backfill_enabled is True
+        assert cfg.retention_dry_run is True

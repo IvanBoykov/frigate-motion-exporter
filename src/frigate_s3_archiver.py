@@ -508,8 +508,15 @@ async def find_motion_intervals(
     interval_chunk_seconds=DEFAULT_INTERVAL_CHUNK_SECONDS,
     recordings_timeout=DEFAULT_RECORDINGS_TIMEOUT,
     min_start_ts=None,
+    settled_end=False,
 ):
     """Find and split motion intervals inside the requested time range.
+
+    ``settled_end`` marks a range whose end cannot be overtaken by new
+    recording (a backfill window fully in the past): the ongoing-tail
+    deferral is a live-loop concern, so a settled range archives its final
+    short chunk instead of postponing it. Default False - the live loop's
+    behavior is the unchanged one.
 
     ``after_ts`` is the actual lower bound passed to Frigate. During normal
     continuous processing it should be the previous successfully processed
@@ -651,7 +658,9 @@ async def find_motion_intervals(
                 scan_end_ts=end_ts,
                 chunk_seconds=interval_chunk_seconds,
                 max_gap_seconds=max_gap_seconds,
-                is_last_interval=(index == len(raw_intervals) - 1),
+                is_last_interval=(
+                    index == len(raw_intervals) - 1 and not settled_end
+                ),
             )
         )
 
@@ -2055,6 +2064,65 @@ async def run_until_signalled(coro):
             loop.remove_signal_handler(sig)
 
 
+async def async_backfill_main(config, now_fn=time.time):
+    """One-shot backfill: fill [BACKFILL_AFTER, BACKFILL_BEFORE) and exit.
+
+    Same startup shape as async_main - metrics listener, discovery, the same
+    camera filters - and deliberately none of its lifetime: no supervisors,
+    no prune task, no idle loop. Retention deletion is refused at config time
+    in this mode, so the only writer here is the fill itself; the age cap is
+    not applied because footage the operator named is not doomed by a
+    threshold the operator can see in their own env.
+    """
+    import backfill
+
+    metrics_bind = metrics.metrics_bind_from_env()
+    bound_port = metrics.start_metrics_server(
+        port=metrics.metrics_port_from_env(),
+        bind=metrics_bind,
+    )
+    log.info("Metrics: http://%s:%d/metrics", metrics_bind, bound_port)
+    try:
+        frigate_client = make_frigate_client(
+            config.frigate_url,
+            username=config.frigate_user,
+            password=config.frigate_password,
+        )
+        cameras = await fetch_cameras_with_retry(frigate_client)
+        discovered = list(cameras)
+        cameras = select_cameras(
+            cameras,
+            include=config.cameras_include,
+            exclude=config.cameras_exclude,
+        )
+        if not cameras:
+            log.error("%s", empty_camera_list_message(discovered, config))
+            return 1
+        log.info(
+            "Backfill: window %s..%s, cameras: %s",
+            human_ts(config.backfill_after, config.s3_key_timezone),
+            human_ts(config.backfill_before, config.s3_key_timezone),
+            ", ".join(cameras),
+        )
+        report = await backfill.run_backfill(
+            config,
+            cameras,
+            config.backfill_after,
+            config.backfill_before,
+            now_fn=now_fn,
+        )
+        failed = sorted(name for name, row in report.items() if "error" in row)
+        log.info(
+            "Backfill finished: %d camera(s), %d failed%s",
+            len(report),
+            len(failed),
+            f": {', '.join(failed)}" if failed else "",
+        )
+        return 1 if failed else 0
+    finally:
+        metrics.shutdown_metrics_server()
+
+
 def main():
     """Load the environment configuration and archive until interrupted."""
     # Imported here rather than at module scope: config reads the DEFAULT_*
@@ -2080,7 +2148,11 @@ def main():
                 config.s3_key_timezone,
             )
     try:
-        status = asyncio.run(run_until_signalled(async_main(config=config)))
+        if config.backfill_enabled:
+            runner = async_backfill_main(config)
+        else:
+            runner = async_main(config=config)
+        status = asyncio.run(run_until_signalled(runner))
     except asyncio.CancelledError:
         # A signal requested the stop and the cancellation path completed:
         # an expected exit, not an error to report.

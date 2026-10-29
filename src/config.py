@@ -285,8 +285,19 @@ class Config:
     retention_growth_headroom_bytes: object
     retention_dry_run: bool
     retention_limit_upload_depth: bool
+    backfill_after: object
+    backfill_before: object
     log_level: int
     log_json: bool
+
+    @property
+    def backfill_enabled(self):
+        """Whether this process is a one-shot backfill instead of the loop.
+
+        Both bounds or neither: the cross-check in load_config refuses half a
+        window, so one flag is enough here.
+        """
+        return self.backfill_after is not None
 
     @property
     def retention_enabled(self):
@@ -299,6 +310,62 @@ class Config:
             self.retention_keep_days is not None
             or self.retention_keep_bytes is not None
         )
+
+
+def _backfill_window(environ):
+    """The explicit [after, before) of a one-shot backfill, or (None, None).
+
+    A backfill is the operator's answer to "the outage outlived the
+    FIRST_RUN_LOOKBACK_SECONDS window": one pass over exactly these bounds,
+    then exit. The window is parsed here (epoch seconds or ISO, via
+    backfill.parse_bound) so a typo names its variable at startup rather
+    than after the first clip.
+
+    Cross-checks, all refused at startup:
+    - only one bound: half a window is not a bound - the point of the mode
+      is that a human said how far back;
+    - after >= before: an empty or inverted window archives nothing while
+      reading like a successful run;
+    - backfill + RETENTION_DRY_RUN=false: one process would delete archive
+      on a threshold computed against the archive before the fill, then
+      write the clips back - both orderings lose, so the modes are separate
+      processes and the operator runs them in the order they meant.
+    """
+    raw_after = _present(environ, "BACKFILL_AFTER")
+    raw_before = _present(environ, "BACKFILL_BEFORE")
+    if raw_after is None and raw_before is None:
+        return None, None
+    if raw_after is None or raw_before is None:
+        missing = "BACKFILL_AFTER" if raw_after is None else "BACKFILL_BEFORE"
+        raise ConfigError(
+            missing,
+            "a backfill window has two bounds; set " + missing
+            + " (epoch seconds or ISO 8601) or unset both to run the"
+            " normal loop",
+        )
+    import backfill
+
+    try:
+        after = backfill.parse_bound(raw_after, "BACKFILL_AFTER")
+        before = backfill.parse_bound(raw_before, "BACKFILL_BEFORE")
+    except ValueError as exc:
+        variable, _, detail = str(exc).partition(":")
+        raise ConfigError(variable, detail.strip()) from None
+    if after >= before:
+        raise ConfigError(
+            "BACKFILL_AFTER",
+            f"must be before BACKFILL_BEFORE; got a window"
+            f" [{after!r}, {before!r}) that archives nothing",
+        )
+    if _flag(environ, "RETENTION_DRY_RUN", True) is False:
+        raise ConfigError(
+            "RETENTION_DRY_RUN",
+            "backfill and enabled retention deletion cannot share one"
+            " process: the prune pass would judge the old archive before"
+            " the fill existed. Run the backfill first (dry-run retention"
+            " is fine), then the normal process",
+        )
+    return after, before
 
 
 def load_config(environ=None):
@@ -350,6 +417,8 @@ def _load(environ):
             "CAMERA_RESTART_BACKOFF_MAX_SECONDS",
             f"must be >= CAMERA_RESTART_BACKOFF_SECONDS ({backoff})",
         )
+
+    backfill_after, backfill_before = _backfill_window(environ)
 
     return Config(
         frigate_url=_present(environ, "FRIGATE_URL")
@@ -403,6 +472,8 @@ def _load(environ):
         ),
         camera_restart_backoff_seconds=backoff,
         camera_restart_backoff_max_seconds=backoff_max,
+        backfill_after=backfill_after,
+        backfill_before=backfill_before,
         **_retention(environ),
         log_level=_log_level(environ, "LOG_LEVEL", logging_setup.DEFAULT_LOG_LEVEL),
         log_json=_flag(environ, "LOG_JSON", False),

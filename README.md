@@ -93,6 +93,9 @@ Requirements:
   holds. `FIRST_RUN_LOOKBACK_SECONDS` (3 days by default) is the cold-resume window:
   footage older than that at startup is out of scope even if Frigate still has it.
   Set it below Frigate's motion retention (`record.motion.days`), never above it.
+  Downtime deeper than that window is not lost while Frigate still holds the
+  footage: run a one-shot backfill over the explicit gap (*Backfilling an
+  explicit window*) instead of raising the lookback for every restart.
 - **S3:** a bucket the credentials can `ListObjectsV2` by prefix, `HeadObject`,
   `PutObject`, and multipart create/upload/complete/abort against. The tool owns
   `<S3_PREFIX><camera>/` outright - the watermark is derived from those keys - so no
@@ -449,6 +452,7 @@ names the variable and exits before the first request is sent.
 | `MAX_GAP_SECONDS` | Largest gap between motion segments still treated as one event. Raise it when a camera drops segments often, so a brief hole does not end the event and start a new one; gaps wider than this really are two events, and bridging them would archive a clip containing a hole | `40` |
 | `WATERMARK_LOOKBACK_SECONDS` | How far back the startup listing looks to find the newest clip for a camera. Must cover the longest planned downtime, otherwise the archive resumes later than it should and footage is skipped | `86400` |
 | `FIRST_RUN_LOOKBACK_SECONDS` | Where a camera with no clips in the bucket starts. Kept at or beyond the Frigate recording retention | `259200` |
+| `BACKFILL_AFTER` / `BACKFILL_BEFORE` | Turn the process into a one-shot backfill over exactly this window (epoch seconds or ISO 8601), then exit. Both or neither; see *Backfilling an explicit window* | unset (normal loop) |
 | `CLIP_RETRIES` | Re-fetch attempts for a failed clip window, shared by all three chains: a stream cut inside its final box, a "no recordings" 400, and an empty 200. `0` acts on the first answer: a truncated export is reported as an error instead of being re-requested (and produces no `-truncated.mp4` key), an unavailable window is closed by its marker without retrying | `6` |
 | `CLIP_RETRY_MAX_DELAY_SECONDS` | Ceiling for the pause between those attempts: it starts at 10 s and doubles until it saturates here. The defaults span ~310 s across all retries - a budget sized to ride out a Frigate restart without sealing windows | `80` |
 | `CAMERA_RESTART_BACKOFF_SECONDS` | First delay before a crashed camera task is restarted; doubles per consecutive crash | `5` |
@@ -461,6 +465,49 @@ point for a camera whose bucket prefix is empty. Because the fallback replaces a
 lookback that failed rather than one that found a recent clip, downtime longer
 than the first window costs re-scanning, not coverage; downtime longer than the
 second costs footage.
+
+### Backfilling an explicit window (manual catch-up)
+
+The loop only ever archives forward from the watermark, and a cold start
+never looks deeper than `FIRST_RUN_LOOKBACK_SECONDS`. When the process was
+down longer than that window - or a camera was excluded while it was broken -
+the older footage is still inside Frigate but the loop will never fetch it.
+A backfill is the operator-driven fix: one pass per camera over an explicitly
+named window, then the process exits.
+
+```
+BACKFILL_AFTER=2026-10-01T00:00:00+03:00 BACKFILL_BEFORE=2026-10-04T00:00:00+03:00 \
+  docker compose run --rm exporter
+```
+
+- Both variables, or none. Half a window is refused at startup: the point of
+  the mode is that a human named how far back. Values are epoch seconds or
+  ISO 8601 (`Z` or an offset; a naive value reads as UTC), and the start log
+  echoes both bounds back in `S3_KEY_TIMEZONE` so you see the instant meant.
+  `BACKFILL_AFTER >= BACKFILL_BEFORE` is refused too - an empty or inverted
+  window would exit 0 having archived nothing.
+- Camera selection works as usual (`CAMERAS_INCLUDE`/`CAMERAS_EXCLUDE`), so
+  one broken camera's gap can be filled alone. Cameras run sequentially on
+  purpose: peak memory scales with concurrent uploaders, and a catch-up has
+  no latency target. A camera that fails does not stop the others; the
+  process exits 1 naming them, `errors_total{kind=...}` counts the failure.
+- The run is resumable by construction: every clip is a key the uploader
+  skips when present, so re-running the same window after an interruption
+  re-fetches only what is missing. Interrupting it with SIGINT/SIGTERM is
+  safe the same way any other interruption is.
+- The watermark is untouched - the fill writes ordinary keys, and the live
+  loop's resume keeps its single source of truth. A window entirely below
+  the watermark (the gap case) fills without moving it; a window ending near
+  `now` defers its final tail to the live loop, exactly as the loop defers
+  its own ongoing events.
+- Retention deletion cannot be enabled in a backfill process
+  (`RETENTION_DRY_RUN=false` is refused at startup): whichever order one
+  process ran them in, the prune pass would judge the archive against the
+  state before the fill. Run the backfill first, then the normal process.
+  The day-threshold age cap does not apply inside the fill - you asked for
+  this footage by name - but the next prune pass still deletes what falls
+  outside `RETENTION_KEEP_DAYS`: a backfill durably fills only gaps your
+  retention thresholds would keep.
 
 ### Retention (deleting old footage)
 
@@ -644,7 +691,7 @@ Bucket state at exit -> behavior on the next start:
 | Empty (first run, or only unparseable keys) | Scan the last `first_run_lookback_seconds` (3 days) | nothing newer than the window; older footage is out of scope by design |
 | Newest clip within `watermark_lookback_seconds` (24 h) | Resume from its start; the overlapping clip is skipped by `head_object` | none |
 | Newest clip older than 24 h (long downtime) | Treated as no clips: resume from the 3-day first-run window, which is wider than the lookback, so the gap between the newest clip and now is re-scanned | none, provided downtime < 3 days |
-| Downtime longer than the 3-day first-run window | Everything between the last clip and `now - first_run_lookback_seconds` is never scanned, even though Frigate may still hold it (this instance keeps motion segments 35 days) | footage older than 3 days of downtime - raise `first_run_lookback_seconds` if the host can be offline longer |
+| Downtime longer than the 3-day first-run window | Everything between the last clip and `now - first_run_lookback_seconds` is never scanned, even though Frigate may still hold it (this instance keeps motion segments 35 days) | nothing, once a backfill run covers the gap - the loop will not fetch it by itself, so fill it with `BACKFILL_AFTER`/`BACKFILL_BEFORE` before Frigate's retention expires it; raising `first_run_lookback_seconds` also works but pays a deep scan on every restart |
 | Killed during a scan | Nothing was written; the pass is redone | none |
 | Killed between clips | Resume from the newest clip's start | none |
 | Killed during a small clip (single PUT) | S3 PUT is atomic: the object is complete or absent; re-uploaded | none |
