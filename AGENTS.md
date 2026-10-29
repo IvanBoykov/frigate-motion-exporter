@@ -357,7 +357,7 @@ feature is a planner bug reaching the bucket.
   `reason="headroom"`, and `keep_bytes=0` is refused at config time so that
   branch cannot be reached by a blank setting.
 - **The headroom formula is settled**: `sum over cameras of the newest
-  floor(prune_interval/1h)+1 hour folders` - a big hour may repeat (the cat
+  ceil(prune_interval/1h)+1 hour folders` - a big hour may repeat (the cat
   did not leave, the holiday continues), so reserving the spike is the point,
   not a flaw. Its accepted consequence is that the estimate only moves when
   new folders arrive, so a camera that spiked once and went quiet pins the
