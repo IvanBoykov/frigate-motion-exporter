@@ -83,9 +83,11 @@ def build_pattern(key_timezone):
     """The key layout regex, as the inverse of ``make_s3_key``.
 
     Same three window-closing shapes ``parse_s3_clip_start`` accepts (plain
-    clip, truncated clip, no-recordings marker), so a changed ``S3_PREFIX``
-    shows up as foreign bytes - which the caller can refuse to delete against -
-    rather than as an archive with a surprising layout.
+    clip, truncated clip, no-recordings marker) and the same alphabet: every
+    group accepts exactly what the writer can render, so a key this pattern
+    calls ours is a key ``parse_s3_clip_start`` also parses. The census and the
+    watermark must never disagree about what the archive is: a key one sees and
+    the other does not is deletable-but-resume-invisible (or the reverse).
 
     ``S3_KEY_TIMEZONE`` is not covered by that property and deliberately so: a
     zone only renames folders, and the pattern matches any well-formed name, so
@@ -105,7 +107,12 @@ def build_pattern(key_timezone):
     return re.compile(
         r"^(?P<camera>[^/]+)/"
         r"(?P<year>\d{4})/(?P<month>\d{2})/(?P<day>\d{2})/(?P<hour>\d{2})/"
-        r"(?P<minute>\d{2})-(?P<second>\d{2})"
+        # The writer renders %M-%S, so minute and second are always < 60;
+        # [0-5]\d keeps the pattern the inverse of what make_s3_key can emit.
+        # A bare \d{2} counted "10/77-30.mp4" as ours while the watermark's
+        # parser refused it, so such a key was deletable but invisible to
+        # resume - the one shape where the two parsers disagreed.
+        r"(?P<minute>[0-5]\d)-(?P<second>[0-5]\d)"
         r"(?:"
         + re.escape(archiver.CLIP_KEY_EXTENSION)
         + "|"

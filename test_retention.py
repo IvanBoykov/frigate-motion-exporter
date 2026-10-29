@@ -174,6 +174,50 @@ def test_census_accounts_for_every_byte_under_the_prefix():
     assert candidates + protected + result.unknown_bytes == expected
 
 
+def test_census_and_watermark_parsers_accept_exactly_the_same_keys():
+    """One archive, two readers - they must never disagree about a key.
+
+    The census decides what is ours to delete; the watermark parser decides
+    what proves the archive when resuming. A key the census calls ours but
+    the watermark refuses is deletable yet invisible to resume: a cold start
+    re-archives over it. The historical divergence was minute/second: the
+    writer renders %M-%S (always < 60), a bare \\d{2} still called minute 77
+    ours while parse_s3_clip_start answered None. Names are built through
+    strftime so the layout under test is the one the writer uses.
+    """
+    from datetime import datetime
+
+    tz = TZ
+    moment = datetime(2026, 10, 1, 10, 5, 30, tzinfo=tz)
+    date = f"{moment:%Y/%m/%d/%H}"
+    pattern = census.build_pattern(tz)
+    shapes = {
+        "ordinary clip": (".mp4", ""),
+        "truncated": ("-truncated.mp4", ""),
+        "marker": ("", "-no-recordings"),
+    }
+    agree = 0
+    for suffix, extension in shapes.values():
+        for mm, ss in [("00", "00"), ("59", "59"), ("60", "00"),
+                       ("77", "30"), ("05", "60")]:
+            name = f"{PREFIX}cam/{date}/{mm}-{ss}{suffix}{extension}"
+            kind, _camera, _folder, _epoch = census.classify(
+                name, PREFIX, pattern, tz
+            )
+            parsed = archiver.parse_s3_clip_start(
+                "cam", name, tz, PREFIX
+            )
+            assert (kind is census.OURS) == (parsed is not None), name
+            agree += 1
+
+    assert agree == 15
+    # and the exact F-8 shape, once more by hand: ours to census was the bug
+    bad = f"{PREFIX}cam/{date}/77-30.mp4"
+    kind, _c, _f, _e = census.classify(bad, PREFIX, pattern, tz)
+    assert kind is census.UNKNOWN
+    assert archiver.parse_s3_clip_start("cam", bad, tz, PREFIX) is None
+
+
 def test_census_only_sees_the_prefix_and_reports_foreign_keys_inside_it():
     """Keys outside the prefix are not foreign, they are invisible.
 

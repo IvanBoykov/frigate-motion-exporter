@@ -369,6 +369,21 @@ feature is a planner bug reaching the bucket.
   entirely (0 is a value, not "unset": the pass then aims at `KEEP_BYTES`
   itself, which is the right shape for a soft quota and wrong for a hard one;
   pinned by config and pass-level tests).
+- **The census and the watermark share one key alphabet.** `build_pattern`
+  accepts exactly what `make_s3_key` can render - minute/second are `[0-5]\d`,
+  not `\d{2}` - so a key either reader recognizes, both do. The divergence
+  this closes: a hand-written `.../77-30.mp4` was OURS to the census
+  (deletable, counted in sizes) and None to the watermark parser (invisible to
+  resume), so a cold start would re-archive over it. Unknown is the right
+  answer: it lands in the foreign-bytes accounting, which is where unexpected
+  writers belong. Pinned by a 15-shape agreement test across all three
+  window-closing suffixes.
+- **Pagination is deliberately uncapped.** A multi-million-key archive is
+  listed one page at a time with no page limit: a real S3 terminates, and the
+  failure mode that matters - an endpoint looping on `NextToken` forever -
+  cannot complete a pass, so `prune_in_progress` stays 1 and
+  `RetentionPassStuck` fires at 46 m. A cap would not improve that state (the
+  pass is refused either way) and would refuse legitimate huge buckets.
 - **Foreign keys stop the pass.** Above `MAX_UNKNOWN_FRACTION` of unknown bytes
   nothing is deleted: a changed `S3_PREFIX` makes a whole healthy archive look
   foreign, and that is precisely when deletion must not run.
