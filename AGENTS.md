@@ -710,6 +710,25 @@ the real delete path rather than a recording double. rclone needs
 answers `200` on the bare port root, so `curl` alone cannot tell it from the
 archiver's own 302-to-auth case.
 
+Refused deletes (the R7 path), live against a real S3-protocol endpoint:
+`moto_server` on `127.0.0.1:18081` behind a transparent HTTP proxy on `:18080`
+that answers `DeleteObjects` with a well-formed `DeleteResult` carrying one
+`<Error><Code>AccessDenied</Code>` per requested key while the flag file says
+`all` (flag re-read per request, so healing is a file write, not a restart).
+2 cameras x 8 hours x 2 clips through the real `run_prune_pass`: the dry run
+planned 8 folders; with deletes refused the pass planned the same 8, every one
+of the 16 planned keys was counted into
+`retention_delete_failures_total{kind="s3_accessdenied"}` (16.0, not 2 - the
+per-key `Errors` body, not the per-request exception, is what botocore hands
+the executor, which is the one thing the in-repo fake asserts by construction
+rather than by wire behavior), and the bucket kept all 32 keys; after healing,
+the next pass deleted exactly the 16 planned keys, the failure counter did not
+move, and both cameras kept their newest folder. Note on the harness: this
+environment's Debian `rclone` is 1.60, whose `serve` has no `s3` subcommand
+(it landed in upstream 1.61), so the refusal harness uses `moto[server]` from
+PyPI; everything under test - real botocore, real XML parsing, our executor,
+planner and pass - is the production path either way.
+
 Every test that drives `async_main` keeps the metrics listener off the fixed default
 port - either by stubbing `start_metrics_server` or by setting `METRICS_PORT=0` and
 letting the OS pick an ephemeral port - because `async_main` binds a real port and the
