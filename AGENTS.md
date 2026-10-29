@@ -346,10 +346,53 @@ feature is a planner bug reaching the bucket.
   `reason="headroom"`, and `keep_bytes=0` is refused at config time so that
   branch cannot be reached by a blank setting.
 - **Foreign keys stop the pass.** Above `MAX_UNKNOWN_FRACTION` of unknown bytes
-  nothing is deleted: a changed `S3_PREFIX`/`S3_KEY_TIMEZONE` makes a whole
-  healthy archive look foreign, and that is precisely when deletion must not
-  run. `retention_unknown_bytes`/`_keys` make the state visible; the alert tells
-  you to fix the setting rather than raise the fraction.
+  nothing is deleted: a changed `S3_PREFIX` makes a whole healthy archive look
+  foreign, and that is precisely when deletion must not run.
+  `retention_unknown_bytes`/`_keys` make the state visible; the alert tells
+  you to fix the setting rather than raise the fraction. `S3_KEY_TIMEZONE` is
+  deliberately not in that list: a zone only renames folders, every key still
+  parses as ours (measured: 0 unknown bytes for a UTC+3 archive read as UTC),
+  and the protected set is identical under either zone because name order and
+  epoch order both follow the name - pinned by
+  `test_a_changed_key_timezone_neither_flags_foreign_keys_nor_moves_the_plan`.
+  A zone change is still fatal, just elsewhere: the watermark's day-prefix
+  listing stops finding the old names and the camera cold-starts.
+- **An unsorted or duplicating listing stops the pass before the first
+  delete.** The census is a streaming reduction: a folder closes when the next
+  key names a different one, and the day floor is a `deque` window over that
+  arrival order. `ListObjectsV2` guarantees sorted, duplicate-free keys; an
+  endpoint that breaks the guarantee corrupts the floor silently (measured on
+  a reversed listing: the window still reports its configured length while
+  protecting 1 of 48 hours), and a repeated key double-counts its bytes.
+  `archive_census.ListingOrderError` (a `RuntimeError`, so the error-kind
+  classifier cannot misread it as a Frigate payload fault) maps to
+  `prune_failures_total{kind="s3_listing_unsorted"}`. Refusing costs one pass -
+  the supervisor backs off and the next census re-listes - which is the same
+  price as any other census failure and far cheaper than deleting under a floor
+  that cannot be vouched for.
+- **The `deque` windows are an arrival-order device, not a memory one.** Every
+  folder ends up either protected or a candidate, so the census holds every hour
+  folder it has seen whatever `floor_hours` says: at a fixed 1440 folders the
+  peak was 0.9 MB with no floor and 0.6 MB with a 15-day *or* a 30-day one -
+  the delta is only which container the folders sit in, and it stops shrinking
+  as the floor grows because nothing is ever dropped. The container choice is
+  therefore worth ~25 B/folder against the candidate map's shape and ~39
+  B/folder against a flat one at 100 cameras x 288 hours (0.23 vs 0.92 vs
+  1.31 MB), which is noise: the archive's own byte count is what costs
+  anything. A `deque` is used because "newest N of a stream" is exactly what
+  `maxlen`/`popleft` express, and because the alternative - sort every epoch at
+  the end - buys an order-independent census for a memory delta that does not
+  matter.
+- **An order-independent census is possible but does not remove the guard.**
+  Keying folders by `folder_key` instead of closing them on the next key, and
+  taking the newest epochs by sorting at the end, drops the sorted-arrival
+  requirement for both the grouping and the floor. It cannot drop the
+  duplicate-free requirement: `total_bytes` decides the size target, and a
+  repeated key still adds its bytes twice to the folder it lands in. Catching
+  that without refusing the listing means holding every object key ever seen -
+  per-object memory, the one shape this census deliberately avoids (it holds
+  per-folder state only). The guard costs one comparison and one variable, so
+  the trade favors keeping it.
 - The prune task is supervised like a camera task but **a dead prune supervisor
   is fatal**, because retention that stopped silently means unbounded growth and
   no counter except the quota itself would reveal it. Its failures report on
@@ -581,6 +624,22 @@ the process stayed alive and kept serving `/metrics`. In a second run, one
 camera aimed at a TCP black hole (connections accepted, never answered) reported
 `camera_task_running == 0` for its whole wedged watermark read while the other
 camera archived at `1` - the case the gauge placement in `run_camera` exists for.
+
+Retention, also live against `rclone serve s3` on `127.0.0.1:9000` (2160 keys,
+3 cameras, 30 days, path-style addressing, so the listing spanned several
+1000-key pages): the census returned every key with the full 7-day floor per
+camera and the order guard never fired - the live-endpoint half of
+`test_sorted_listing_still_builds_the_floor`, which no fake can settle. A pass
+with `keep_bytes` below the archive then deleted 1385 keys and left 775, and the
+surviving depth was equal across cameras (258/258/259 keys, same oldest hour
+folder for all three). That equal depth is the property the candidate loop's
+shape buys: it walks `sorted(census.hours)` and takes every camera's folder of
+one epoch before moving to the next, so a size-capped pass eats one hour from
+all cameras instead of emptying whichever camera sorts first. Observed through
+the real delete path rather than a recording double. rclone needs
+`--s3-access-key-id`/`--s3-secret-access-key` (not `--access-key-id`) and
+answers `200` on the bare port root, so `curl` alone cannot tell it from the
+archiver's own 302-to-auth case.
 
 Every test that drives `async_main` keeps the metrics listener off the fixed default
 port - either by stubbing `start_metrics_server` or by setting `METRICS_PORT=0` and

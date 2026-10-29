@@ -52,14 +52,49 @@ Census = namedtuple(
 )
 
 
+class ListingOrderError(RuntimeError):
+    """The endpoint's listing is not the sorted, duplicate-free one S3 promises.
+
+    The census reduces a listing with a streaming state machine: an hour folder
+    is closed when the next key names a different folder, and the day floor is a
+    sliding window over that arrival order. Both are only correct if the listing
+    arrives sorted - which ``ListObjectsV2`` guarantees. An endpoint that breaks
+    the guarantee silently corrupts the floor: the window still reports its
+    configured length while protecting a scattered subset of hours, and
+    ``protected_hours`` cannot see the difference. Retention therefore refuses
+    to plan against such an endpoint at all rather than delete under a floor it
+    cannot vouch for.
+
+    A repeated key is refused on the same grounds: it would double-count its
+    bytes and promise to free storage that is not there. One real way to meet it
+    is a listing that overlaps a backfill - the loader writing an old interval
+    into folders the pagination has already passed - which is exactly the
+    census-vs-delete race this pass cannot settle, so refusing is the right
+    answer there too. Either way the cost is one pass: the supervisor backs off
+    and the next census re-listes from scratch.
+
+    A ``RuntimeError``, not a ``ValueError``: the error-kind classifier maps
+    ``ValueError`` to a Frigate payload fault, and this is neither a Frigate
+    problem nor a payload problem.
+    """
+
+
 def build_pattern(key_timezone):
     """The key layout regex, as the inverse of ``make_s3_key``.
 
     Same three window-closing shapes ``parse_s3_clip_start`` accepts (plain
-    clip, truncated clip, no-recordings marker), so a changed
-    ``S3_PREFIX``/``S3_KEY_TIMEZONE`` shows up as foreign bytes - which the
-    caller can refuse to delete against - rather than as an archive with a
-    surprising layout.
+    clip, truncated clip, no-recordings marker), so a changed ``S3_PREFIX``
+    shows up as foreign bytes - which the caller can refuse to delete against -
+    rather than as an archive with a surprising layout.
+
+    ``S3_KEY_TIMEZONE`` is not covered by that property and deliberately so: a
+    zone only renames folders, and the pattern matches any well-formed name, so
+    a zone change yields zero foreign keys and moves nothing across the
+    ours/unknown boundary. Measured: reading a UTC-written bucket as any other
+    zone keeps ``unknown_bytes`` at 0 and leaves the deletion selection
+    identical, because folder-name order and epoch order both follow the name.
+    What a zone change does break is on the loader side - the watermark's
+    day-prefix window stops finding the old names - see README.
     """
     closed_clip = re.escape(archiver.TRUNCATED_KEY_SUFFIX) + re.escape(
         archiver.CLIP_KEY_EXTENSION
@@ -181,7 +216,10 @@ def take_census(
     hours, which is what the caller needs to predict near-future growth.
 
     A listing failure propagates: a partial census would under-report the
-    archive's size and hand the planner a plan about footage it never saw.
+    archive's size and hand the planner a plan about footage it never saw. An
+    out-of-order listing raises :class:`ListingOrderError` for the same reason
+    in reverse - the size would be right while the floor quietly protected the
+    wrong hours.
     """
     if key_timezone is None:
         key_timezone = archiver.DEFAULT_S3_KEY_TIMEZONE
@@ -196,6 +234,7 @@ def take_census(
     unknown_bytes = 0
     unknown_keys = 0
     newest_epoch = None
+    previous_key = None
 
     paginator = s3_client.get_paginator("list_objects_v2")
     log.debug(
@@ -204,6 +243,24 @@ def take_census(
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
             key = obj.get("Key", "")
+            # ListObjectsV2 returns every key exactly once, in UTF-8 binary
+            # order, and UTF-8 preserves code-point order for any string - not
+            # just the ASCII keys this layout normally writes - so Python's <
+            # on str is the spec check. A non-increasing key means the endpoint
+            # is not honoring the guarantee this pass is planned against: out of
+            # order the day floor protects a scattered subset of hours, and a
+            # duplicate double-counts its bytes and inflates the plan. Checked
+            # before any state is touched, so a bad endpoint cannot leave a
+            # half-reduced census behind.
+            if previous_key is not None and key <= previous_key:
+                relation = "duplicates" if key == previous_key else "follows"
+                raise ListingOrderError(
+                    f"listing of {bucket}/{prefix} is not strictly increasing:"
+                    f" {key!r} {relation} {previous_key!r}. Retention needs the"
+                    " sorted, duplicate-free listing S3 guarantees; refusing to"
+                    " plan."
+                )
+            previous_key = key
             size = int(obj.get("Size", 0) or 0)
             total_keys += 1
             total_bytes += size

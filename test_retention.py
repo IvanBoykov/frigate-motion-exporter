@@ -179,8 +179,10 @@ def test_census_only_sees_the_prefix_and_reports_foreign_keys_inside_it():
 
     The listing is prefix-scoped, so the archive's size is the prefix's size
     and data elsewhere in the bucket is nobody's budget. What the census has to
-    catch is a foreign key *inside* the prefix: a changed S3_PREFIX or
-    S3_KEY_TIMEZONE makes our own older archive look exactly like this.
+    catch is a foreign key *inside* the prefix: a changed S3_PREFIX makes our
+    own older archive look exactly like this. (A changed S3_KEY_TIMEZONE does
+    not - renamed folders still parse as ours - which is why the zone's real
+    cost lands on the watermark, not on this guard.)
     """
     s3 = build({"a": 2})
     outside = "other/camera/2026-10-01/00/00-00.mp4"
@@ -271,6 +273,135 @@ def test_census_pages_through_a_bucket_larger_than_one_page():
     )
     assert candidate_keys == 160
     assert result.cameras["a"].protected_hours == 24
+
+
+class UnsortedFakeS3(FakeS3):
+    """An endpoint that ignores the ListObjectsV2 ordering guarantee.
+
+    Reversal is enough to break a streaming reduction of the listing, and it is
+    deterministic: no seeded shuffle needed to pin the behavior.
+    """
+
+    def __init__(self, objects=None, page_size=1000, batch_supported=True):
+        super().__init__(objects, page_size=page_size,
+                         batch_supported=batch_supported)
+        self._descending = sorted(self.objects, reverse=True)
+
+    def get_paginator(self, operation_name):
+        outer = self
+
+        class Paginator:
+            def paginate(self, Bucket, Prefix=""):
+                yield {
+                    "Contents": [
+                        {"Key": k, "Size": outer.objects[k]}
+                        for k in outer._descending
+                    ],
+                    "KeyCount": len(outer._descending),
+                }
+
+        return Paginator()
+
+
+def build_unsorted(rooms, per_hour=4, clip_bytes=1024):
+    """``build``'s fixture served in reverse lexicographic order."""
+    s3 = UnsortedFakeS3()
+    for camera, hours in rooms.items():
+        for hour in range(hours):
+            for index in range(per_hour):
+                s3.put(key(camera, hour, index), clip_bytes + hour + index)
+    s3._descending = sorted(s3.objects, reverse=True)
+    return s3
+
+
+def test_unsorted_listing_stops_the_census():
+    """The floor is a window over arrival order, so an endpoint that does not
+    sort would protect a scattered subset of hours while still reporting a full
+    ``protected_hours``. Refuse the listing instead of planning under a floor
+    that cannot be vouched for."""
+    s3 = build_unsorted({"a": 48}, per_hour=1)
+
+    with pytest.raises(census.ListingOrderError) as excinfo:
+        take(s3, floor_hours=24)
+
+    assert "not strictly increasing" in str(excinfo.value)
+
+
+def test_duplicate_key_in_a_listing_stops_the_census():
+    """A repeated key would count its bytes twice, so the archive would read
+    larger than it is and the plan would free bytes that do not exist."""
+    s3 = build({"a": 4}, per_hour=1)
+    duplicated = sorted(s3.objects)
+    duplicated.insert(2, duplicated[1])
+
+    class Repeater(FakeS3):
+        def get_paginator(self, operation_name):
+            outer = self
+
+            class Paginator:
+                def paginate(self, Bucket, Prefix=""):
+                    yield {
+                        "Contents": [
+                            {"Key": k, "Size": outer.objects[k]}
+                            for k in duplicated
+                        ],
+                        "KeyCount": len(duplicated),
+                    }
+
+            return Paginator()
+
+    broken = Repeater(s3.objects)
+    with pytest.raises(census.ListingOrderError) as excinfo:
+        take(broken, floor_hours=1)
+
+    assert "duplicates" in str(excinfo.value)
+
+
+def test_sorted_listing_still_builds_the_floor():
+    """The check must not fire on a spec-honoring endpoint. The one place a
+    comparison across a page boundary could go wrong is pagination itself, so
+    the fixture is sized to land keys on both sides of it: the last key of a
+    page must still precede the first key of the next."""
+    s3 = build({"a": 60, "b": 60, "c": 60}, per_hour=3, page_size=64)
+    result = take(s3, floor_hours=24)
+    pages = len(s3.listings)
+
+    assert pages > 1
+    assert result.total_keys == 540
+    for camera in ("a", "b", "c"):
+        assert result.cameras[camera].protected_hours == 24
+    assert sum(len(row) for row in result.hours.values()) == 108
+
+
+def test_a_changed_key_timezone_neither_flags_foreign_keys_nor_moves_the_plan():
+    """What the docs promise about S3_KEY_TIMEZONE, pinned.
+
+    A zone only names folders differently, so every key still parses as ours:
+    the foreign-key guard cannot be the thing that catches a zone change. And
+    because folder-name order and epoch order both follow the name, the same
+    folders stay protected under either zone. The zone's real cost is on the
+    watermark, where the day-prefix listing stops finding the old names.
+    """
+    other_zone = ZoneInfo("Pacific/Kiritimati")  # UTC+14: the largest offset
+    s3 = build({"a": 48, "b": 30}, per_hour=2)
+
+    def plan_read_as(zone):
+        result = census.take_census(
+            s3, "bucket", prefix=PREFIX, key_timezone=zone,
+            floor_hours=24 * 2, recent_hours=0,
+        )
+        built = rt.build_plan(
+            result, keep_bytes=None, headroom_bytes=0,
+            max_delete_percent=100.0, max_unknown_fraction=0.5,
+        )
+        return result, {folder.folder_key for folder in built.folders}
+
+    _ours, keys_here = plan_read_as(TZ)
+    shifted, keys_there = plan_read_as(other_zone)
+
+    assert (shifted.unknown_keys, shifted.unknown_bytes) == (0, 0)
+    assert keys_there == keys_here
+
 
 def test_growth_headroom_sums_the_newest_hours_over_all_cameras():
     result = take(build({"a": 10, "b": 10}), recent_hours=2)

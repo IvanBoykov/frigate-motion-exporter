@@ -206,6 +206,21 @@ class TestCensusFailure:
 
         assert REGISTRY.get_sample_value("prune_in_progress") == 0
 
+    def test_an_unsorted_endpoint_deletes_nothing_and_is_counted(self):
+        """An endpoint that does not sort cannot be trusted with the floor, so
+        the pass must stop before the first delete and say so under its own
+        error kind."""
+        s3 = tr.build_unsorted({next(NAMES): 60})
+
+        with pytest.raises(archive_census.ListingOrderError):
+            asyncio.run(run_pass(s3, dry_run=False))
+
+        assert s3.deletes == []
+        assert REGISTRY.get_sample_value(
+            COUNTER, {"kind": "s3_listing_unsorted"}
+        )
+        assert len(s3.objects) == 60 * 4
+
 
 class TestSupervisor:
     def test_success_waits_the_interval_and_failures_back_off(self):

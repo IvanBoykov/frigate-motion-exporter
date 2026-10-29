@@ -197,15 +197,17 @@ def build_plan(
     total = census.total_bytes
     unknown_fraction = (census.unknown_bytes / total) if total else 0.0
     if unknown_fraction > max_unknown_fraction:
-        # A changed S3_PREFIX or S3_KEY_TIMEZONE makes an existing archive look
-        # like foreign data. Deleting "only our keys" against such a census
-        # would quietly keep the part we no longer understand forever while
-        # reporting it as archived, so nothing is deleted at all.
+        # A changed S3_PREFIX makes an existing archive look like foreign data.
+        # Deleting "only our keys" against such a census would quietly keep the
+        # part we no longer understand forever while reporting it as archived,
+        # so nothing is deleted at all. S3_KEY_TIMEZONE is NOT caught here: a
+        # zone only renames folders and the pattern matches any well-formed
+        # name, so a zone change yields zero foreign keys. See README.
         log.error(
             "Refusing to delete: %.1f%% of the %d bytes under the prefix are"
             " keys this archiver did not write (limit %.1f%%). A changed"
-            " S3_PREFIX or S3_KEY_TIMEZONE makes an existing archive look like"
-            " foreign data - fix the setting before enabling deletion.",
+            " S3_PREFIX makes an existing archive look like foreign data - fix"
+            " the setting before enabling deletion.",
             unknown_fraction * 100,
             total,
             max_unknown_fraction * 100,

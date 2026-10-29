@@ -133,8 +133,9 @@ RETENTION_TARGET_BYTES = Gauge(
 RETENTION_UNKNOWN_BYTES = Gauge(
     "retention_unknown_bytes",
     "Bytes under the archive prefix whose keys this archiver did not write."
-    " A nonzero value normally means S3_PREFIX or S3_KEY_TIMEZONE changed and"
-    " the existing archive now looks foreign to it; above"
+    " A nonzero value normally means S3_PREFIX changed and the existing archive"
+    " now looks foreign to it (a changed S3_KEY_TIMEZONE does not: a zone only"
+    " renames folders, and those still parse as ours); above"
     " RETENTION_MAX_UNKNOWN_FRACTION the pass refuses to delete anything",
 )
 RETENTION_UNKNOWN_KEYS = Gauge(
@@ -155,8 +156,8 @@ RETENTION_OVER_BUDGET_BYTES = Gauge(
     " reason label says why no further deletion happened: floor means the"
     " protected days cost more than the target allows, percent_cap means the"
     " per-pass brake stopped it and more will go next pass, foreign_keys means"
-    " a changed S3_PREFIX or S3_KEY_TIMEZONE made the archive unrecognizable"
-    " and the pass refused to delete",
+    " a changed S3_PREFIX made the archive unrecognizable and the pass refused"
+    " to delete",
     ["reason"],
 )
 CLIPS_DELETED_TOTAL = Counter(
@@ -197,6 +198,10 @@ _S3_NETWORK_KINDS = {
     "IncompleteReadError": "s3_short_response",
 }
 
+# archive_census.ListingOrderError, matched by name because metrics cannot
+# import archive_census (it imports this module through the archiver).
+_CENSUS_KINDS = {"ListingOrderError": "s3_listing_unsorted"}
+
 # Fixed vocabulary: an alert rule can enumerate these. Anything unrecognized
 # becomes "unknown", which is itself a signal that this list needs updating.
 _ERROR_KINDS = frozenset(
@@ -215,7 +220,7 @@ _ERROR_KINDS = frozenset(
         "timeout",
         "unknown",
     }
-) | set(_S3_NETWORK_KINDS.values())
+) | set(_S3_NETWORK_KINDS.values()) | set(_CENSUS_KINDS.values())
 
 
 def frigate_error_kind(exc):
@@ -264,6 +269,8 @@ def _kind_of_one(exc):
         return s3_error_kind(exc)
     if type(exc).__name__ in _S3_NETWORK_KINDS:
         return _S3_NETWORK_KINDS[type(exc).__name__]
+    if type(exc).__name__ in _CENSUS_KINDS:
+        return _CENSUS_KINDS[type(exc).__name__]
     if isinstance(exc, asyncio.TimeoutError):
         return "timeout"
     if isinstance(exc, ValueError):

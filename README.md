@@ -228,7 +228,7 @@ startup rather than silently disabling observability.
 | `deleted_bytes_total` | Counter | `camera` | Bytes actually deleted |
 | `retention_dry_run` | Gauge | - | 1 while retention only plans. 0 means deletion is enabled, but only once a pass has run: with retention disabled it sits at its 0 default, so read it with `prune_last_success_timestamp_seconds > 0` |
 | `retention_archive_bytes` / `retention_target_bytes` / `retention_headroom_bytes` | Gauge | - | Archive size, the configured size target, and the growth headroom held back. `retention_target_bytes` is 0 when only `KEEP_DAYS` is set |
-| `retention_unknown_bytes` / `retention_unknown_keys` | Gauge | - | Bytes/keys under the prefix this archiver did not write. Nonzero usually means `S3_PREFIX` or `S3_KEY_TIMEZONE` changed |
+| `retention_unknown_bytes` / `retention_unknown_keys` | Gauge | - | Bytes/keys under the prefix this archiver did not write. Nonzero usually means `S3_PREFIX` changed; a changed `S3_KEY_TIMEZONE` does not show up here, because renamed folders still parse as ours |
 | `retention_over_budget_bytes` | Gauge | `reason` | How far the archive is over target, on the one series naming why the pass stopped: `target_met`, `floor`, `percent_cap`, `foreign_keys`, `headroom`. Only the matching reason is nonzero |
 | `prune_last_success_timestamp_seconds` | Gauge | - | Unix time the last prune pass finished clean. 0 until the first pass and while retention is disabled |
 | `prune_failures_total` | Counter | `kind` | Prune pass failures by error kind. Deliberately separate from `errors_total`, which means "archiving is broken" |
@@ -528,9 +528,17 @@ Protections against a bad pass, each independent:
   and refuses to start if the prefix no longer looks like the census that
   planned against;
 - above `RETENTION_MAX_UNKNOWN_FRACTION` of foreign-looking bytes the pass
-  deletes nothing at all - the state a changed `S3_PREFIX` or
-  `S3_KEY_TIMEZONE` produces, where a healthy archive has become unreadable as
-  ours.
+  deletes nothing at all - the state a changed `S3_PREFIX` produces, where a
+  healthy archive has become unreadable as ours. A changed `S3_KEY_TIMEZONE` is
+  not that state: a zone only renames folders, and renamed folders still parse
+  as ours, so this guard cannot catch it (what a zone change breaks is the
+  watermark - see the S3 section);
+- a listing that is not strictly increasing - out of lexicographic order, or
+  repeating a key - ends the pass before the first delete. The protected window
+  is built from the listing's arrival order, so an endpoint that does not
+  guarantee it cannot be trusted to know which hours it promised to keep; the
+  failure reports as `prune_failures_total{kind="s3_listing_unsorted"}` and the
+  next pass re-listes from scratch.
 
 The reason a pass stopped where it did is reported, never guessed at:
 `target_met`, `floor`, `percent_cap`, `foreign_keys`, or `headroom` (a target so
