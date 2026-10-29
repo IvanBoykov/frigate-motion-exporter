@@ -3026,3 +3026,67 @@ def test_main_exits_one_when_startup_discovery_gives_up(
     assert "Camera discovery failed (1/2): ConnectionError: frigate is down" in text
     assert "Camera discovery failed 2 times; giving up" in text[-2]
     assert text[-1] == "Archiver stopped by an unhandled error."
+
+
+def _main_warnings(frigate_server, monkeypatch, caplog, key_timezone=None):
+    """Run main() far enough to see its startup warnings, then SIGINT."""
+    _signal_main_env(frigate_server, monkeypatch)
+    if key_timezone is not None:
+        monkeypatch.setenv("S3_KEY_TIMEZONE", key_timezone)
+    monkeypatch.setattr(logging_setup, "configure_logging", lambda **kw: None)
+    caplog.set_level(logging.WARNING, logger="frigate_s3_archiver")
+
+    started = threading.Event()
+    real_run_cameras = m._run_cameras
+
+    async def spy_run_cameras(cfg, s3_bucket, key_tz, now_fn):
+        started.set()
+        return await real_run_cameras(cfg, s3_bucket, key_tz, now_fn)
+
+    monkeypatch.setattr(m, "_run_cameras", spy_run_cameras)
+    sender = threading.Thread(
+        target=lambda: (started.wait(10), os.kill(os.getpid(), signal.SIGINT)),
+        daemon=True,
+    )
+    sender.start()
+    with pytest.raises(SystemExit):
+        m.main()
+    sender.join(timeout=10)
+    return [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and record.name == "frigate_s3_archiver"
+    ]
+
+
+def test_main_warns_once_about_a_dst_key_timezone(
+    frigate_server, monkeypatch, caplog
+):
+    """Two real hours share one key on the fall-back hour: worth one warning.
+
+    The warning is startup-only and does not stop the run - the zone is a
+    legal choice, only its collision is the problem, and the operator may
+    have accepted it deliberately.
+    """
+    warnings = _main_warnings(
+        frigate_server, monkeypatch, caplog, key_timezone="Europe/Berlin"
+    )
+
+    assert len(warnings) == 1
+    assert "S3_KEY_TIMEZONE" in warnings[0].getMessage()
+    assert "Europe/Berlin" in warnings[0].getMessage()
+
+
+def test_main_is_silent_about_a_fold_free_key_timezone(
+    frigate_server, monkeypatch, caplog
+):
+    """An explicitly chosen fold-free zone must not warn - and the default
+    must not warn either, or every deployment starts with noise."""
+    chosen = _main_warnings(
+        frigate_server, monkeypatch, caplog, key_timezone="Asia/Tokyo"
+    )
+    assert chosen == []
+
+    default = _main_warnings(frigate_server, monkeypatch, caplog)
+    assert default == []

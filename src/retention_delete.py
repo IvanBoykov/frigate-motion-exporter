@@ -107,7 +107,10 @@ def _delete_batch(s3_client, bucket, keys):
         },
     )
     errors = response.get("Errors") or []
-    return [str(err.get("Key", "")) for err in errors]
+    return [
+        (str(err.get("Key", "")), str(err.get("Code") or "unknown"))
+        for err in errors
+    ]
 
 
 def _delete_batch_one_by_one(s3_client, bucket, keys):
@@ -116,10 +119,9 @@ def _delete_batch_one_by_one(s3_client, bucket, keys):
         try:
             s3_client.delete_object(Bucket=bucket, Key=key)
         except ClientError as exc:
-            log.warning(
-                "Delete of %s failed: %s", key, _s3_error_code(exc) or exc
-            )
-            failed.append(key)
+            code = _s3_error_code(exc) or "unknown"
+            log.warning("Delete of %s failed: %s", key, code or exc)
+            failed.append((key, code))
     return failed
 
 
@@ -154,7 +156,7 @@ def execute_plan(
     cancel_event=None,
 ):
     """Delete the plan's folders; return per-camera ``(keys, bytes)`` and the
-    list of keys any delete call reported as failed.
+    list of ``(key, s3_error_code)`` pairs any delete call reported as failed.
 
     Runs in a worker thread like every other blocking S3 path. ``cancel_event``
     is checked at every folder and batch boundary: ``asyncio.to_thread`` cannot

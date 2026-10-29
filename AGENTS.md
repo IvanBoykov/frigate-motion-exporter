@@ -81,7 +81,9 @@ names by path throughout, so treat them all as load-bearing.
   variable, so per-camera context needs no parameter threading), and a JSON
   formatter selected by `LOG_JSON`. Call sites never change between formats.
 - `src/config.py` - reads the tuning knobs into one frozen `Config` dataclass at
-  startup. `load_config()` returns it; every value is parsed and range-checked
+  startup. Also owns `timezone_collapses_hours()`, the DST-fold detector
+  `main()` uses to warn once about a `S3_KEY_TIMEZONE` whose fall-back hour
+  makes two real hours share one key; the warning never changes the run. `load_config()` returns it; every value is parsed and range-checked
   there, so an invalid setting exits at startup with the variable name in the
   message instead of failing mid-clip. `ConfigError` is a `SystemExit`.
   It imports the `DEFAULT_*` constants from `frigate_s3_archiver` (one direction
@@ -335,7 +337,14 @@ feature is a planner bug reaching the bucket.
 - **One global oldest-hour-first sweep**, not a per-camera budget. That is what
   keeps depth even: an hour leaves one camera only where every camera holding it
   loses it. A camera that stopped recording loses its tail first, which is the
-  correct reading of "oldest first" and not a fairness bug.
+  correct reading of "oldest first" and not a fairness bug. The one exception is
+  geometric: when a byte target or the percent cap stops the sweep *inside* an
+  epoch row, the folders consumed at that row left a subset of cameras - the
+  next row's fairness is intact, the boundary row's is not (measured: a fat
+  camera loses the boundary hour alone). Convergence, not per-pass equality, is
+  what the sweep guarantees: a shallow camera catches up untouched while deeper
+  cameras are trimmed to the threshold, and every camera stabilizes at the
+  threshold.
 - **`now()` is never called in the planner.** Every time comes from a key, so
   clock skew cannot move a deletion boundary. The same rule holds the loader's
   cold-start cap: `upload_age_cap_seconds(cfg)` derives depth from config alone,
@@ -395,6 +404,22 @@ feature is a planner bug reaching the bucket.
   per-object memory, the one shape this census deliberately avoids (it holds
   per-folder state only). The guard costs one comparison and one variable, so
   the trade favors keeping it.
+- **The newest-hour guard reads the bucket's own newest key, not the wall
+  clock** - deliberately: the archive is retention's only source of truth, so
+  hours from a clock-skewed writer still occupy space and are eligible like any
+  other bytes. The consequence is accepted knowingly: with future-labeled
+  folders, "newest" points into the future and a genuinely recent folder can
+  be deleted, and the day-prefix watermark lookback can then resume from the
+  next day's keys (a cold start re-archives, not a loss). Fixing it with
+  `now()` is refused: the planner's clock-free rule is load-bearing for skew
+  safety, and the repair is on the writer side (the watermark-in-future alert).
+- A prune pass whose delete calls were refused is still a successful pass - the
+  plan is re-made from the bucket next interval and refused keys are still
+  listed by then. That is the right call for one bad pass, and it is why
+  `retention_delete_failures_total{kind}` exists: without it, credentials that
+  can list and write but never delete look perfectly healthy forever. The
+  alert (R7) fires only on *two consecutive refused pass windows plus a
+  growing census* - a flat archive under refusals is deliberately silent.
 - The prune task is supervised like a camera task but **a dead prune supervisor
   is fatal**, because retention that stopped silently means unbounded growth and
   no counter except the quota itself would reveal it. Its failures report on
@@ -456,6 +481,11 @@ process-global `prometheus_client` registry, and `async_main` binds `METRICS_POR
   matching one nonzero. The reason is not decoration: `floor` means the
   configuration is impossible, `percent_cap` means the schedule is too slow, and
   the fix is different.
+- `retention_delete_failures_total{kind}` - keys a delete call refused, by
+  lowercased S3 code (`s3_accessdenied`). Deliberately not folded into
+  `prune_failures_total`: a pass can free most of its plan and still carry
+  refusals while the heartbeat records a success, and pass-level counting would
+  hide exactly the permanent-refusal case this exists to reveal.
 - `prune_last_success_timestamp_seconds`, `prune_failures_total{kind}`,
   `prune_in_progress` - the pruner's heartbeat. `prune_in_progress` is the only
   signal for a pass wedged inside `to_thread`, where nothing else moves: the

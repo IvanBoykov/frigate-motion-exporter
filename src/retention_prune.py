@@ -150,6 +150,22 @@ def count_deletes(per_camera):
             metrics.DELETED_BYTES_TOTAL.labels(camera=camera).inc(freed)
 
 
+def count_delete_failures(failed):
+    """Charge every key a delete call refused, labeled by the refusing code.
+
+    A pass can free most of its plan and still carry refused keys, and the
+    heartbeat calls that pass a success - this counter is what makes the
+    refusals visible in Prometheus at all. The code is lowercased into the
+    same ``s3_*`` vocabulary as the error kinds, so one alert can watch S3
+    rejections without enumerating codes.
+    """
+    by_code = {}
+    for _key, code in failed:
+        by_code[code.lower()] = by_code.get(code.lower(), 0) + 1
+    for code, count in by_code.items():
+        metrics.DELETE_FAILURES_TOTAL.labels(kind=f"s3_{code}").inc(count)
+
+
 async def run_prune_pass(
     s3_client,
     bucket,
@@ -227,6 +243,7 @@ async def run_prune_pass(
                 _gib(freed),
             )
             if failed:
+                count_delete_failures(failed)
                 log.error(
                     "%d keys were reported as not deleted; they stay for the"
                     " next pass",

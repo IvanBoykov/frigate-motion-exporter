@@ -2059,13 +2059,26 @@ def main():
     """Load the environment configuration and archive until interrupted."""
     # Imported here rather than at module scope: config reads the DEFAULT_*
     # constants from this module, so importing it at the top would be circular.
-    from config import load_config
+    from config import load_config, timezone_collapses_hours
 
     config = load_config()
     logging_setup.configure_logging(
         level=config.log_level,
         json_format=config.log_json,
     )
+    if config.s3_key_timezone != DEFAULT_S3_KEY_TIMEZONE:
+        # Only warn when the operator chose the zone: the default is UTC and
+        # must not produce startup noise.
+        if timezone_collapses_hours(
+            config.s3_key_timezone, time.gmtime().tm_year
+        ):
+            log.warning(
+                "S3_KEY_TIMEZONE=%s has DST: on the fall-back hour two real"
+                " hours map to the same key, so one clip overwrites the other"
+                " at upload and retention sees one folder where two hours"
+                " were archived. UTC (or a fixed-offset zone) has no fold.",
+                config.s3_key_timezone,
+            )
     try:
         status = asyncio.run(run_until_signalled(async_main(config=config)))
     except asyncio.CancelledError:

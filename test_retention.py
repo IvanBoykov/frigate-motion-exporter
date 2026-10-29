@@ -768,8 +768,10 @@ def test_batch_errors_are_reported_not_swallowed():
         s3, "bucket", plan, prefix=PREFIX, key_timezone=TZ
     )
 
-    assert failed == [victim]
+    assert failed == [(victim, "InternalError")]
     assert victim in s3.objects
+    # a refusal keeps its code: the prune pass prices the counter by it
+
 
 
 def test_cancellation_stops_between_folders():

@@ -221,6 +221,27 @@ spec:
             summary: No successful retention pass in over 3 hours
             description: Retention ran at some point and stopped succeeding. Check prune_failures_total
               for the kind and the process log for the pass. The archive keeps growing while this holds.
+        - alert: RetentionDeletesRefusedWhileGrowing
+          expr: |
+            (
+              increase(retention_delete_failures_total[90m]) > 0
+              and on(instance)
+              increase(retention_delete_failures_total[90m] offset 90m) > 0
+              and on(instance)
+              delta(retention_archive_bytes[3h]) > 0
+            )
+            and on(instance)
+            (prune_last_success_timestamp_seconds > 0)
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: Retention deletes are being refused while the archive grows
+            description: 'Delete calls reported refused keys within the last 2 hours and the archive got
+              bigger over the same window. The counter''s kind names the S3 code: s3_accessdenied means
+              the credentials can list and write but not delete, s3_nosuchkey-style kinds are a lie from
+              the endpoint. The pruner keeps passing and keeps trying every pass, so nothing is lost yet
+              - but nothing is being freed either, and the quota is the deadline.'
         - alert: CameraInDeepBackoff
           expr: camera_consecutive_failures >= 5
           for: 5m

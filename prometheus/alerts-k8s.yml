@@ -374,6 +374,44 @@ groups:
             prune_failures_total for the kind and the process log for the pass.
             The archive keeps growing while this holds.
 
+      # R7. Deletes are refused in two consecutive pass windows while the
+      # archive grows. A pass with refused keys still counts as successful (the
+      # plan is re-made from the bucket every pass, so a transient refusal
+      # costs one interval, not the data), which is exactly why the refusals
+      # need their own rule - and why this one waits for persistence: the two
+      # 90-minute halves (2 x the default 45 min pass) must each hold at least
+      # one refused key, so a single refused pass can never arm it, and the
+      # growth term must be true at the same evaluation, so a refused pass on
+      # an archive that is flat anyway stays silent. Together they read: two
+      # consecutive passes refused and the archive getting bigger - deletion
+      # that is gone without anyone noticing, which is the state the success
+      # heartbeat cannot see.
+      - alert: RetentionDeletesRefusedWhileGrowing
+        expr: |
+          (
+            increase(retention_delete_failures_total[90m]) > 0
+            and on(instance)
+            increase(retention_delete_failures_total[90m] offset 90m) > 0
+            and on(instance)
+            delta(retention_archive_bytes[3h]) > 0
+          )
+          and on(instance)
+          (prune_last_success_timestamp_seconds > 0)
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            Retention deletes are being refused while the archive grows
+          description: >-
+            Delete calls reported refused keys within the last 2 hours and the
+            archive got bigger over the same window. The counter's kind names
+            the S3 code: s3_accessdenied means the credentials can list and
+            write but not delete, s3_nosuchkey-style kinds are a lie from the
+            endpoint. The pruner keeps passing and keeps trying every pass, so
+            nothing is lost yet - but nothing is being freed either, and the
+            quota is the deadline.
+
       - alert: CameraInDeepBackoff
         expr: camera_consecutive_failures >= 5
         for: 5m

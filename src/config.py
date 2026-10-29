@@ -14,6 +14,7 @@ module from ``main()`` only, otherwise the two would form a cycle.
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import logging_setup
@@ -212,6 +213,28 @@ def _key_timezone(environ, name, default):
             f"unknown IANA timezone: {raw!r} "
             "(expected a name like Europe/Moscow or UTC)",
         )
+
+
+def timezone_collapses_hours(zone, year):
+    """True if ``zone`` has a DST fold in ``year``.
+
+    An hour-keyed layout cannot name both copies of a repeated local hour: on
+    a fall-back, two real hours render to one key and the second upload
+    overwrites the first. A spring-forward gap is harmless - it skips a name,
+    it does not reuse one - so the tested condition is exactly "two
+    consecutive hours carry the same hour-of-day", which is a fold and only
+    a fold.
+    """
+    previous = None
+    start = datetime(year, 1, 1, tzinfo=zone).timestamp()
+    for hour in range(366 * 24):
+        moment = datetime.fromtimestamp(start + hour * 3600, zone)
+        if moment.year != year:
+            break
+        if previous is not None and moment.hour == previous:
+            return True
+        previous = moment.hour
+    return False
 
 
 def _s3_prefix(environ, name):

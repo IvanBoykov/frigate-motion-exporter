@@ -232,6 +232,7 @@ startup rather than silently disabling observability.
 | `retention_over_budget_bytes` | Gauge | `reason` | How far the archive is over target, on the one series naming why the pass stopped: `target_met`, `floor`, `percent_cap`, `foreign_keys`, `headroom`. Only the matching reason is nonzero |
 | `prune_last_success_timestamp_seconds` | Gauge | - | Unix time the last prune pass finished clean. 0 until the first pass and while retention is disabled |
 | `prune_failures_total` | Counter | `kind` | Prune pass failures by error kind. Deliberately separate from `errors_total`, which means "archiving is broken" |
+| `retention_delete_failures_total` | Counter | `kind` | Keys a delete call refused, by lowercased S3 code (`s3_accessdenied`, ...). A pass with refusals still counts as a successful pass - the plan is re-made from the bucket next time - so this counter, not `prune_failures_total`, is what makes a permanent delete refusal visible |
 | `prune_in_progress` | Gauge | - | 1 while a pass runs. Stays 1 through a pass wedged in a worker thread, which no other retention metric can see |
 
 `frigate_response_seconds{kind="json"}` covers the metadata requests
@@ -430,6 +431,10 @@ watermark resumes from.
 the watermark is rebuilt by reading existing keys back, so a changed prefix or
 zone makes the previous archive invisible to the listing and the run resumes as
 if the bucket were empty - which skips footage rather than corrupting it.
+A `S3_KEY_TIMEZONE` with a DST fold is a legal choice with one real cost: on
+the fall-back hour two real hours render to the same key, so one clip
+overwrites the other at upload. The process warns once at startup when the
+chosen zone has a fold; UTC and fixed-offset zones never do.
 
 ### Timing and recovery tuning
 
@@ -512,10 +517,15 @@ which is the intended reading.
 **Depth stays even across cameras.** Deletion is one oldest-hour-first sweep
 over every camera's hour folders at the same time, not a per-camera budget. An
 hour disappears from one camera only where every camera holding that hour loses
-it too, so the horizons advance together - verified against a real two-camera
-archive, where a dry run planned ~40 GiB and both cameras'
-`archive_horizon_timestamp_seconds` landed in the same hour. A camera whose
-recordings stopped long ago loses its tail first and alone, which is what
+it too - the one exception is the boundary hour where a byte target or the
+per-pass cap stops the sweep, which can leave a single (fattest) camera losing
+that hour alone while the next hour is fair again. Repeated passes converge
+every camera onto the threshold rather than equalizing each pass: a shallower
+camera is untouched while deeper ones are trimmed, which is convergence, not
+unevenness. Within the steady state the horizons advance together - verified
+against a real two-camera archive, where a dry run planned ~40 GiB and both
+cameras' `archive_horizon_timestamp_seconds` landed in the same hour. A camera
+whose recordings stopped long ago loses its tail first and alone, which is what
 "delete the oldest recordings" means; equal bytes per camera is not the goal.
 
 Protections against a bad pass, each independent:

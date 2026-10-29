@@ -129,6 +129,38 @@ class TestDryRun:
 
 
 class TestDeletion:
+    def test_refused_keys_are_counted_by_their_s3_code(self):
+        """A pass that deleted most of its plan and was refused the rest must
+        show the refusals in Prometheus, not only in the log.
+
+        The heartbeat still calls such a pass a success, so without this
+        counter the only trace of a permanent delete refusal (credentials that
+        can list and write but not delete) is a log line nobody reads.
+        """
+        s3 = fake_s3()
+        victims = [
+            k for k in sorted(s3.objects) if "/2026/10/01/00/" in k
+        ]
+        assert victims
+        s3.fail_keys.update(victims)
+        camera = victims[0].split("/")[1]
+
+        asyncio.run(run_pass(s3, dry_run=False, keep_days=1))
+
+        # the fake reports InternalError; the label follows the reported code
+        refused = REGISTRY.get_sample_value(
+            "retention_delete_failures_total",
+            {"kind": "s3_internalerror"},
+        ) or 0
+        assert refused >= len(victims)
+        # the refused keys are still in the bucket - retried by the next pass
+        assert all(k in s3.objects for k in victims)
+        # and they were never charged as deleted
+        deleted = REGISTRY.get_sample_value(
+            "clips_deleted_total", {"camera": camera}
+        ) or 0
+        assert deleted <= len(s3.deletes)
+
     def test_enabled_run_deletes_and_counts(self):
         s3 = fake_s3()
 

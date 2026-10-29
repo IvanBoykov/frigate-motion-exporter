@@ -181,6 +181,14 @@ PRUNE_FAILURES_TOTAL = Counter(
     "Prune passes that ended in an error, by error kind",
     ["kind"],
 )
+DELETE_FAILURES_TOTAL = Counter(
+    "retention_delete_failures_total",
+    "Keys a delete call reported as not deleted, by the S3 error code that"
+    " refused them. Counted per key, not per pass: a pass can free most of"
+    " its plan and still carry failures, which is why this is not folded into"
+    " prune_failures_total",
+    ["kind"],
+)
 PRUNE_IN_PROGRESS = Gauge(
     "prune_in_progress",
     "1 while a prune pass is between its census and its last delete",

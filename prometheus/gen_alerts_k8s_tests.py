@@ -145,6 +145,8 @@ RULE_LABELS = {
     "RetentionPassStuck": lambda cam, inst: {"instance": inst},
     "RetentionSeesForeignArchive": lambda cam, inst: {"instance": inst},
     "RetentionNotPruning": lambda cam, inst: {"instance": inst},
+    "RetentionDeletesRefusedWhileGrowing": lambda cam, inst: {
+        "instance": inst, "kind": "s3_accessdenied"},
     "RetentionDeletionEnabled": lambda cam, inst: {"instance": inst},
 }
 
@@ -156,19 +158,34 @@ ALL = ["FrigateMotionExporterDown", "FrigateMotionExporterUnscrapeable",
        "WatermarkInFuture", "RetentionFloorExceedsSizeTarget",
        "RetentionCannotReachSizeTarget", "RetentionPassStuck",
        "RetentionSeesForeignArchive", "RetentionNotPruning",
-       "RetentionDeletionEnabled"]
+       "RetentionDeletesRefusedWhileGrowing", "RetentionDeletionEnabled"]
 
 RETENTION_ALERTS = [
     "RetentionFloorExceedsSizeTarget", "RetentionCannotReachSizeTarget",
     "RetentionPassStuck", "RetentionSeesForeignArchive",
-    "RetentionNotPruning", "RetentionDeletionEnabled",
+    "RetentionNotPruning", "RetentionDeletesRefusedWhileGrowing",
+    "RetentionDeletionEnabled",
 ]
 
 FLOOR = 53 * 2**30
 
 
+def step_counter(n, per_pass, period=45):
+    """A counter that jumps by ``per_pass`` every ``period`` samples."""
+    parts = []
+    t = 0
+    count = 0
+    while t < n:
+        span = min(period, n - t)
+        parts.append(f"{count}x{span}")
+        count += per_pass
+        t += span
+    return " ".join(parts)
+
+
 def retention(n, dry=1, over_floor=0, over_cap=0, in_progress=0,
-              heartbeat="track", unknown=0, total=180 * 2**30, inst=INST_A):
+              heartbeat="track", unknown=0, total=180 * 2**30, inst=INST_A,
+              del_fail=0, grow=0):
     """Series a run_prune_pass produces.
 
     Values mirror what set_census_metrics writes: every retention gauge carries
@@ -178,9 +195,15 @@ def retention(n, dry=1, over_floor=0, over_cap=0, in_progress=0,
     as a pruner that stopped that long before the test began.
     """
     beat = f"0+60x{n}" if heartbeat == "track" else heartbeat
-    return [
+    # del_fail charges every pass (45 m apart) its refused keys - the step
+    # shape count_delete_failures writes, one jump per pass, not a trickle;
+    # grow makes the census gauge climb by the bytes one pass lets the
+    # archive gain.
+    fails = step_counter(n, del_fail) if del_fail else None
+    archive = f"{total}+{grow}x{n}" if grow else f"{total}x{n}"
+    series = [
         s("retention_dry_run", f"{dry}x{n}", camera=None, instance=inst),
-        s("retention_archive_bytes", f"{total}x{n}", camera=None, instance=inst),
+        s("retention_archive_bytes", archive, camera=None, instance=inst),
         s("retention_target_bytes", f"{150 * 2**30}x{n}", camera=None,
           instance=inst),
         s("retention_headroom_bytes", "209715200x" + str(n), camera=None,
@@ -205,6 +228,10 @@ def retention(n, dry=1, over_floor=0, over_cap=0, in_progress=0,
         s("archive_horizon_timestamp_seconds", "-86400x" + str(n), camera=CAM,
           instance=inst),
     ]
+    if fails:
+        series.append(s("retention_delete_failures_total", fails, camera=None,
+                        instance=inst, kind="s3_accessdenied"))
+    return series
 
 
 def build():
@@ -678,6 +705,44 @@ def build():
                " Retention that stopped silently means unbounded growth.",
                lines,
                checks(["195m", "196m"], ["RetentionNotPruning"], fired)))
+
+    # R7: refusals + growth, both 2 h windows evaluated per minute.
+    lines = healthy(240, cams=(CAM,)) + retention(
+        240, dry=0, heartbeat="track", del_fail=250, grow=40 * 2**30 // 240)
+    fired = {("60m", "RetentionDeletesRefusedWhileGrowing"): [],
+             ("200m", "RetentionDeletesRefusedWhileGrowing"): [
+                 ({"kind": "s3_accessdenied"}, None)]}
+    sc.append(("R-S11 every pass refused and the archive climbing: at 60 m the"
+               " offset half-window has no samples yet (one refused window"
+               " only), and the rule waits for the second refused half and a"
+               " positive delta at the same evaluation - by 200 m all three"
+               " terms hold and it fires with no `for` to stack.",
+               lines,
+               checks(["60m", "200m"],
+                      ["RetentionDeletesRefusedWhileGrowing"], fired)))
+
+    lines = healthy(240, cams=(CAM,)) + retention(
+        240, dry=0, heartbeat="track", del_fail=250, grow=0)
+    fired = {("60m", "RetentionDeletesRefusedWhileGrowing"): [],
+             ("239m", "RetentionDeletesRefusedWhileGrowing"): []}
+    sc.append(("R-S12 refusals but the archive is flat - an under-target bucket"
+               " with a day floor, where the refused keys do not matter yet."
+               " The growth term is what keeps a permanent-but-harmless"
+               " refusal from paging forever; this is the deliberate blind spot.",
+               lines,
+               checks(["60m", "239m"],
+                      ["RetentionDeletesRefusedWhileGrowing"], fired)))
+
+    lines = healthy(240, cams=(CAM,)) + retention(
+        240, dry=0, heartbeat="track", del_fail=0, grow=40 * 2**30 // 240)
+    fired = {("121m", "RetentionDeletesRefusedWhileGrowing"): [],
+             ("239m", "RetentionDeletesRefusedWhileGrowing"): []}
+    sc.append(("R-S13 growth with zero refusals: ordinary fill toward the"
+               " target. Only the refusals arm the rule, never size alone -"
+               " otherwise every healthy catch-up would page.",
+               lines,
+               checks(["121m", "239m"],
+                      ["RetentionDeletesRefusedWhileGrowing"], fired)))
 
     return sc
 

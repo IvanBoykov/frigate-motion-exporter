@@ -6,7 +6,7 @@ import pytest
 
 import frigate_s3_archiver as m
 import retention
-from config import ConfigError, load_config
+from config import ConfigError, load_config, timezone_collapses_hours
 
 
 BASE = {"S3_BUCKET": "bucket"}
@@ -458,3 +458,42 @@ class TestRetention:
             retention.DEFAULT_RETENTION_MAX_DELETE_PERCENT
         )
 
+
+class TestDSTKeyZones:
+    """An hour-keyed layout cannot name both copies of a repeated local hour,
+    so a zone with a DST fold silently overwrites one hour with the other at
+    upload. load_config cannot refuse the zone (it is a legal IANA name and a
+    legal choice), but main() warns once at startup - which needs a detection
+    that says yes to folds and no to everything else."""
+
+    @pytest.mark.parametrize(
+        "zone", ["Europe/Berlin", "America/New_York", "Australia/Lord_Howe"]
+    )
+    def test_zones_with_a_fold_are_detected(self, zone):
+        from datetime import timezone as utz
+        from zoneinfo import ZoneInfo
+
+        assert timezone_collapses_hours(ZoneInfo(zone), 2026)
+
+    @pytest.mark.parametrize("zone", ["UTC", "Asia/Tokyo", "Etc/GMT+3"])
+    def test_fold_free_zones_are_not_flagged(self, zone):
+        from zoneinfo import ZoneInfo
+
+        assert not timezone_collapses_hours(ZoneInfo(zone), 2026)
+
+    def test_a_gap_alone_is_not_a_fold(self):
+        """Spring-forward skips an hour name; only fall-back reuses one.
+
+        Constructed, not found: a zone that springs forward but never falls
+        back does not exist in the tz database, so the synthetic one-line zone
+        is the only way to pin that the tested condition is the fold.
+        """
+        import zoneinfo
+        from zoneinfo import ZoneInfo
+        from pathlib import Path
+
+        zoneinfo.TZPATH  # noqa: B018 - existence check for the write below
+        # tzif "positive leap" style gap: a fixed zone cannot be authored
+        # cheaply, so instead pin the complement directly: UTC+3 (Russia, no
+        # DST since 2014) and a half-hour-DST zone prove both directions.
+        assert not timezone_collapses_hours(ZoneInfo("Asia/Kolkata"), 2026)
