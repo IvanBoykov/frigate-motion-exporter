@@ -109,6 +109,18 @@ other way for `RetentionCannotReachSizeTarget` (3 h): with a long interval, a
 few *healthy* bounded passes on an over-full bucket can look like a sustained
 miss.
 
+The two failure-streak rules are coupled to the same constant in the first
+direction. `RetentionDeletesRefusedWhileGrowing` looks at 90-minute windows:
+that is two default intervals, the shortest span in which "this pass was
+refused" can be distinguished from "passes are being refused" - with a prune
+interval above 45 m, a single pass no longer lands inside one window and the
+rule goes blind rather than wrong. `RetentionRefusingToDeleteForHeadroom`
+(6 h) is eight default passes, the streak that separates the guard doing its
+job from a headroom estimate that can never drop; at a longer interval, count
+passes, not hours, and widen accordingly. Neither rule false-pages when the
+interval shrinks - more passes in the window only makes the streak evidence
+stronger.
+
 Retention rules are also the only ones here that read process-global gauges
 rather than per-camera series: a prune pass describes the whole archive, so
 `retention_*` and `prune_*` carry no `camera` label and one pod's pass says
