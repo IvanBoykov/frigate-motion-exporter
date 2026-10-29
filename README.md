@@ -524,9 +524,12 @@ Protections against a bad pass, each independent:
 - one pass frees at most `RETENTION_MAX_DELETE_PERCENT` of the archive;
 - hours newer than the sweep, plus the growth estimate, are left alone even
   when the target is already missed;
-- the executor deletes exactly the planned keys, re-lists before each batch,
-  and refuses to start if the prefix no longer looks like the census that
-  planned against;
+- the executor deletes only keys a fresh re-listing still shows and that
+  still parse as our own keys under the configured prefix - a key written by
+  anyone else inside a planned folder survives. The plan selects folders, not
+  objects; the per-key shape check is the only prefix guard, so executor and
+  plan disagreeing about the prefix means every key classifies as foreign and
+  nothing is deleted;
 - above `RETENTION_MAX_UNKNOWN_FRACTION` of foreign-looking bytes the pass
   deletes nothing at all - the state a changed `S3_PREFIX` produces, where a
   healthy archive has become unreadable as ours. A changed `S3_KEY_TIMEZONE` is

@@ -671,6 +671,48 @@ def test_executor_never_deletes_foreign_keys_inside_a_planned_folder():
     assert foreign not in s3.deletes
 
 
+def test_executor_deletes_nothing_when_the_prefix_disagrees_with_the_plan():
+    """The per-key shape check is the whole prefix guard.
+
+    There is no census-vs-executor prefix comparison: a plan built under one
+    prefix and executed under another deletes nothing because every re-listed
+    key classifies UNKNOWN against the handed-in prefix - the quiet no-op, not
+    a refusal. Pinned so a future "optimization" that trusts the plan's folders
+    without re-classifying keys has to change this test on purpose.
+    """
+    s3 = build({"a": 40})
+    result = take(s3, floor_hours=24)
+    plan = rt.build_plan(result, keep_bytes=None, max_delete_percent=100)
+    assert plan.folders
+    before = dict(s3.objects)
+
+    rd.execute_plan(s3, "bucket", plan, prefix="other/", key_timezone=TZ)
+
+    assert s3.deletes == []
+    assert s3.objects == before
+
+
+def test_executor_deletes_a_clip_that_arrived_after_the_census():
+    """The plan selects folders; the executor deletes what the folder holds.
+
+    A clip written into a planned hour folder between census and delete is
+    part of the hour the plan condemned, so it goes with it. This is not a
+    gap the watermark skips: the watermark is the newest key, and retention
+    never plans a camera's newest folder.
+    """
+    s3 = build({"a": 40})
+    result = take(s3, floor_hours=24)
+    plan = rt.build_plan(result, keep_bytes=None, max_delete_percent=100)
+    folder = plan.folders[0].folder_key
+    late = folder + "59-59.mp4"
+    s3.put(late, 7)
+
+    rd.execute_plan(s3, "bucket", plan, prefix=PREFIX, key_timezone=TZ)
+
+    assert late in s3.deletes
+    assert late not in s3.objects
+
+
 def test_executor_relists_a_folder_it_deleted_too_early():
     s3 = build({"a": 40})
     result = take(s3, floor_hours=24)

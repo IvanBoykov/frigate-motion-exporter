@@ -48,7 +48,7 @@ CameraStat = namedtuple(
 Census = namedtuple(
     "Census",
     "total_bytes total_keys unknown_bytes unknown_keys hours cameras "
-    "newest_epoch listed_prefix",
+    "newest_epoch",
 )
 
 
@@ -333,7 +333,6 @@ def take_census(
         hours=hours,
         cameras=stats,
         newest_epoch=newest_epoch,
-        listed_prefix=prefix,
     )
 
 

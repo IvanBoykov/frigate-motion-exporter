@@ -1,13 +1,25 @@
 """Executing a retention plan against S3.
 
 S3 has no delete-by-prefix: a folder is not an object, only a shared key
-substring. So the plan's hour prefixes are a selection, not an argument - each
-one is re-listed here and only keys that survive the re-check are deleted:
+substring. So the plan is a selection of *folders*, never a list of objects -
+each planned prefix is re-listed here and only keys that survive the re-check
+are deleted:
 
 - the fresh listing still returns it (the census is minutes old and the upload
   path is still writing);
 - it parses as one of our keys under our prefix - foreign bytes are measured
   and paid for, never deleted.
+
+That second check is the only prefix guard, and deliberately so: the plan
+names folders under the prefix the census listed, and the executor classifies
+every key the re-listing returns against the prefix *it was handed*. A plan
+built at one prefix executed against another therefore deletes nothing - each
+key classifies UNKNOWN against the new prefix - rather than refusing loudly,
+and a pass that finds nothing to delete is a pass that changed nothing. The
+one thing this does not protect is a same-layout foreign archive under the
+same prefix: shape-only classification cannot tell our clips from another
+deployment writing the identical layout (see the foreign-bytes guard in
+``retention.build_plan``, which prices that state and refuses the plan).
 
 Each camera's newest hour folder never enters a plan in the first place
 (:func:`retention.build_plan`), which is what keeps the camera's newest key -
@@ -81,9 +93,11 @@ def _delete_batch(s3_client, bucket, keys):
     """Delete up to ``DELETE_BATCH_KEYS`` keys; return the failed key names.
 
     ``DeleteObjects`` answers HTTP 200 with a per-key ``Errors`` list, so
-    "no exception" is not "all gone" and the list has to be read. A response
-    that claims a key failed is retried once per key - the per-key call is the
-    only shape that separates a genuinely missing object from a batch fault.
+    "no exception" is not "all gone" and the list has to be read. Reported
+    failures are returned to the caller, not retried here: the next pass
+    re-lists and re-plans from the bucket, and a key that failed is still
+    there for it. Only an endpoint without the batch API at all falls to
+    per-key deletion (``_delete_keys``).
     """
     response = s3_client.delete_objects(
         Bucket=bucket,

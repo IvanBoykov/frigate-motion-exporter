@@ -97,9 +97,11 @@ names by path throughout, so treat them all as load-bearing.
   census plus the thresholds and returns which hour folders leave, never which
   objects. Owns the retention `DEFAULT_*` constants (config imports them from
   here, the same one-direction rule the archiver's constants follow).
-- `src/retention_delete.py` - the deletion *executor*: deletes exactly the keys
-  the plan names, re-listing before each batch and refusing to start when the
-  prefix no longer matches the census the plan was built against. No policy.
+- `src/retention_delete.py` - the deletion *executor*: re-lists each planned
+  hour folder and deletes only keys that still parse as ours under the given
+  prefix - the only prefix guard; a plan and executor disagreeing about the
+  prefix deletes nothing, because every key classifies UNKNOWN. Touches no key
+  outside the planned folders. No policy.
 - `src/retention_prune.py` - ties census -> plan -> delete together on a
   schedule, owns the prune supervisor/backoff, and is the only module that calls
   `metrics` for retention. Deliberately does not import
@@ -590,8 +592,11 @@ watermark lookup rather than a wrong one.
 and deletes for real (within the double) - floor arithmetic over hour folders,
 the global sweep's fairness, percent-cap and headroom behavior, every stop
 reason, the foreign-byte guard refusing a whole-prefix delete, and the
-executor refusing to delete a key the plan did not name. Camera names are
-unique per test because the prometheus registry is process-global.
+executor's per-key shape check - foreign keys inside a planned folder survive,
+a plan aimed at a foreign prefix deletes nothing, and a clip arriving in a
+planned folder after the census is deleted with the folder it belongs to.
+Camera names are unique per test because the prometheus registry is
+process-global.
 
 `test_retention_prune.py`: the pass, its supervisor, and what it publishes -
 dry run deleting nothing while still reporting the horizon it would move to,
