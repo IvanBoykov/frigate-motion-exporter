@@ -145,6 +145,8 @@ RULE_LABELS = {
     "RetentionPassStuck": lambda cam, inst: {"instance": inst},
     "RetentionSeesForeignArchive": lambda cam, inst: {"instance": inst},
     "RetentionNotPruning": lambda cam, inst: {"instance": inst},
+    "RetentionRefusingToDeleteForHeadroom": lambda cam, inst: {
+        "instance": inst, "reason": "headroom"},
     "RetentionDeletesRefusedWhileGrowing": lambda cam, inst: {
         "instance": inst, "kind": "s3_accessdenied"},
     "RetentionDeletionEnabled": lambda cam, inst: {"instance": inst},
@@ -158,13 +160,14 @@ ALL = ["FrigateMotionExporterDown", "FrigateMotionExporterUnscrapeable",
        "WatermarkInFuture", "RetentionFloorExceedsSizeTarget",
        "RetentionCannotReachSizeTarget", "RetentionPassStuck",
        "RetentionSeesForeignArchive", "RetentionNotPruning",
+       "RetentionRefusingToDeleteForHeadroom",
        "RetentionDeletesRefusedWhileGrowing", "RetentionDeletionEnabled"]
 
 RETENTION_ALERTS = [
     "RetentionFloorExceedsSizeTarget", "RetentionCannotReachSizeTarget",
     "RetentionPassStuck", "RetentionSeesForeignArchive",
-    "RetentionNotPruning", "RetentionDeletesRefusedWhileGrowing",
-    "RetentionDeletionEnabled",
+    "RetentionNotPruning", "RetentionRefusingToDeleteForHeadroom",
+    "RetentionDeletesRefusedWhileGrowing", "RetentionDeletionEnabled",
 ]
 
 FLOOR = 53 * 2**30
@@ -183,7 +186,7 @@ def step_counter(n, per_pass, period=45):
     return " ".join(parts)
 
 
-def retention(n, dry=1, over_floor=0, over_cap=0, in_progress=0,
+def retention(n, dry=1, over_floor=0, over_cap=0, over_hr=0, in_progress=0,
               heartbeat="track", unknown=0, total=180 * 2**30, inst=INST_A,
               del_fail=0, grow=0):
     """Series a run_prune_pass produces.
@@ -219,7 +222,7 @@ def retention(n, dry=1, over_floor=0, over_cap=0, in_progress=0,
           instance=inst, reason="target_met"),
         s("retention_over_budget_bytes", "0x" + str(n), camera=None,
           instance=inst, reason="foreign_keys"),
-        s("retention_over_budget_bytes", "0x" + str(n), camera=None,
+        s("retention_over_budget_bytes", f"{over_hr}x{n}", camera=None,
           instance=inst, reason="headroom"),
         s("prune_in_progress", f"{in_progress}x{n}", camera=None, instance=inst),
         s("prune_last_success_timestamp_seconds", beat, camera=None,
@@ -705,6 +708,32 @@ def build():
                " Retention that stopped silently means unbounded growth.",
                lines,
                checks(["195m", "196m"], ["RetentionNotPruning"], fired)))
+
+    lines = healthy(420, cams=(CAM,)) + retention(
+        420, dry=0, over_hr=40 * 2**30, heartbeat="track")
+    fired = {("359m", "RetentionRefusingToDeleteForHeadroom"): [],
+             ("360m", "RetentionRefusingToDeleteForHeadroom"): [({}, None)],
+             ("360m", "RetentionFloorExceedsSizeTarget"): [],
+             ("360m", "RetentionCannotReachSizeTarget"): []}
+    sc.append(("R-S14 every pass stopped by the growth-reservation guard: R8"
+               " fires at its 6h (eight default passes refused - one refusal"
+               " is the guard working as designed), and the floor/cap rules"
+               " stay silent because headroom is its own over-budget series.",
+               lines,
+               checks(["359m", "360m"], RETENTION_ALERTS, fired)))
+
+    lines = healthy(420, cams=(CAM,)) + retention(
+        420, dry=0, over_floor=0, over_hr=40 * 2**30, heartbeat="track")
+    fired = {("360m", "RetentionRefusingToDeleteForHeadroom"): [({}, None)],
+             ("360m", "RetentionFloorExceedsSizeTarget"): []}
+    sc.append(("R-S15 the headroom guard is evaluated before the floor (it is"
+               " checked before any sweeping), so a bucket whose estimate is"
+               " over target reports headroom even when its floor is also over"
+               " target - R8 fires, R1 stays silent until the reservation is"
+               " fixed. One reason per pass is what keeps the alerts from"
+               " blaming the wrong knob.",
+               lines,
+               checks(["360m"], RETENTION_ALERTS, fired)))
 
     # R7: refusals + growth, both 2 h windows evaluated per minute.
     lines = healthy(240, cams=(CAM,)) + retention(

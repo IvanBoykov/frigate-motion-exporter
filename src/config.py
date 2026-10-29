@@ -78,7 +78,8 @@ def _flag(environ, name, default):
 
 
 def _bytes(environ, name, minimum=None):
-    """An optional byte count: unset/blank is None, a set value is a positive int.
+    """An optional byte count: unset/blank is None, a set value is an int >=
+    ``minimum`` (a set 0 is a value - "reserve nothing" - not a missing knob).
 
     Both retention thresholds are optional in a way no other knob is - unset
     means "this threshold is not configured", not "use a default" - so they get

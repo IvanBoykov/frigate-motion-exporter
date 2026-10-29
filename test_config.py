@@ -431,6 +431,21 @@ class TestRetention:
             load(RETENTION_GROWTH_HEADROOM_BYTES=1024)
         ).retention_growth_headroom_bytes == 1024
 
+    def test_headroom_zero_is_the_documented_off_switch(self):
+        """0 is a value, not a missing threshold: it means "reserve nothing,
+        aim at keep_bytes itself". A reader that treated 0 like unset would
+        silently re-enable the estimate this switch exists to turn off, so the
+        distinction is pinned here as well as in the pass-level test.
+        """
+        assert (
+            load(RETENTION_GROWTH_HEADROOM_BYTES=0)
+        ).retention_growth_headroom_bytes == 0
+
+    def test_headroom_cannot_be_negative(self):
+        assert error_variable(
+            RETENTION_GROWTH_HEADROOM_BYTES="-1"
+        ).startswith("RETENTION_GROWTH_HEADROOM_BYTES:")
+
     @pytest.mark.parametrize(
         "name, value",
         [

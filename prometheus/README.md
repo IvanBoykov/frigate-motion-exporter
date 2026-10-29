@@ -60,6 +60,7 @@ Detection latencies at 1 m / 1 m, for reference:
 | RetentionCannotReachSizeTarget | 3 h | ~3 h |
 | RetentionPassStuck | 5 m + 45 m | ~45 min into a wedged pass |
 | RetentionNotPruning | 3 h guard + 15 m | 196 min after the last successful pass: the strict `> 3h` first holds at 181 m, the `for` adds 15 |
+| RetentionRefusingToDeleteForHeadroom | 6 h | ~6 h after the growth-reservation guard starts refusing every pass (eight default-length passes); one refusal is the guard working, only the streak is the alert |
 | RetentionDeletesRefusedWhileGrowing | two 90 m windows + 3 h delta, no `for` | ~3 h after deletion starts being refused, once two consecutive pass windows refused and the census grew; needs a growing archive - refusals on an under-target bucket are deliberately silent |
 | RetentionDeletionEnabled | 6 h | ~6 h after deletion is enabled - info-level, a record rather than a page |
 

@@ -472,7 +472,7 @@ decisions - a threshold, and then `RETENTION_DRY_RUN=false`.
 | --- | --- | --- |
 | `RETENTION_KEEP_DAYS` | Protected depth per camera. The newest `24 * KEEP_DAYS` hour folders are never deleted, whatever the archive costs. Counts folders that exist, not calendar days since now. `0` means no day floor - size alone decides, down to each camera's newest hour | unset - required by `KEEP_BYTES`, or by `RETENTION_DRY_RUN=false` |
 | `RETENTION_KEEP_BYTES` | Total archive size to stay under, in bytes. Total-archive size cap; a target above the floor, never a way through it | unset - no size limit |
-| `RETENTION_GROWTH_HEADROOM_BYTES` | New footage to leave room for between passes, so a pass does not delete what the next hour archives. Estimated from the archive's own growth when unset | unset - estimated |
+| `RETENTION_GROWTH_HEADROOM_BYTES` | New footage to leave room for between passes, so a pass does not delete what the next hour archives. Estimated from the archive's own growth when unset; `0` disables the reservation - the pass aims at `KEEP_BYTES` itself, which is right for a soft quota and wrong for a hard one | unset - estimated |
 | `RETENTION_PRUNE_INTERVAL_SECONDS` | Seconds between prune passes | `2700` |
 | `RETENTION_MAX_DELETE_PERCENT` | Largest share of the archive one pass may delete. `100` disables the brake | `25` |
 | `RETENTION_MAX_UNKNOWN_FRACTION` | Refuse to delete at all when more than this fraction of the bytes under the prefix is keys this archiver did not write | `0.5` |
@@ -556,7 +556,8 @@ Protections against a bad pass, each independent:
 The reason a pass stopped where it did is reported, never guessed at:
 `target_met`, `floor`, `percent_cap`, `foreign_keys`, or `headroom` (a target so
 small that even the newest hours could not fit it, which means the byte count is
-wrong). A pass that cannot list its bucket deletes nothing and raises; the
+wrong, or the newest hours are a recording spike the growth estimate reads as a
+rate - sustained, `RetentionRefusingToDeleteForHeadroom` says so). A pass that cannot list its bucket deletes nothing and raises; the
 supervisor backs off and retries, and archiving is unaffected either way.
 
 ### Memory and resource sizing

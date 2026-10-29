@@ -356,6 +356,19 @@ feature is a planner bug reaching the bucket.
   the target is already missed). A misconfigured headroom reports
   `reason="headroom"`, and `keep_bytes=0` is refused at config time so that
   branch cannot be reached by a blank setting.
+- **The headroom formula is settled**: `sum over cameras of the newest
+  floor(prune_interval/1h)+1 hour folders` - a big hour may repeat (the cat
+  did not leave, the holiday continues), so reserving the spike is the point,
+  not a flaw. Its accepted consequence is that the estimate only moves when
+  new folders arrive, so a camera that spiked once and went quiet pins the
+  estimate at its spike indefinitely - the guard then refuses every pass, the
+  archive grows toward the quota, and nothing is deleted. That state is an
+  alert (`RetentionRefusingToDeleteForHeadroom`, 6h of refusals), not a code
+  fix, and the operator's escape hatches are a bigger `KEEP_BYTES`, a pinned
+  `RETENTION_GROWTH_HEADROOM_BYTES`, or `=0` to disable the reservation
+  entirely (0 is a value, not "unset": the pass then aims at `KEEP_BYTES`
+  itself, which is the right shape for a soft quota and wrong for a hard one;
+  pinned by config and pass-level tests).
 - **Foreign keys stop the pass.** Above `MAX_UNKNOWN_FRACTION` of unknown bytes
   nothing is deleted: a changed `S3_PREFIX` makes a whole healthy archive look
   foreign, and that is precisely when deletion must not run.
@@ -617,6 +630,12 @@ with no prefix set a key is byte-identical to one written before prefixes
 existed (so an existing bucket keeps resuming), and build/parse round-trip only
 inside one layout, which is what makes a changed `S3_PREFIX` show up as an empty
 watermark lookup rather than a wrong one.
+
+`test_retention_prune.py` pins the headroom off switch end to end: a bucket
+whose newest hour is a 10x spike deletes nothing with the estimate active
+(`reason="headroom"`, the gauge above target) and deletes normally with
+`growth_headroom_bytes=0` - the switch demonstrably changes behavior rather
+than being a knob nobody reads.
 
 `test_retention.py`: the planner and the census against a fake S3 that lists
 and deletes for real (within the double) - floor arithmetic over hour folders,

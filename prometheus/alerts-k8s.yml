@@ -262,8 +262,9 @@ groups:
       # more than the size target allows, so the archive stays permanently over
       # budget. No pass can fix this by deleting - the floor is what it is - and
       # the pruner is healthy, so this is not a stall: only a configuration
-      # change resolves it. A misconfigured headroom reports reason="headroom"
-      # instead and never reaches this rule.
+      # change resolves it. A growth-reservation refusal reports
+      # reason="headroom" instead (the guard runs before any sweeping, so it
+      # wins whenever both hold) and is R8's, not this rule's.
       - alert: RetentionFloorExceedsSizeTarget
         expr: retention_over_budget_bytes{reason="floor"} > 0
         for: 15m
@@ -411,6 +412,37 @@ groups:
             endpoint. The pruner keeps passing and keeps trying every pass, so
             nothing is lost yet - but nothing is being freed either, and the
             quota is the deadline.
+
+      # R8. A pass stopped by the growth-reservation guard for hours. One pass
+      # with reason="headroom" is the guard working as designed: the target
+      # cannot hold the archive and its next interval's writes, so nothing is
+      # deleted and the numbers go to the log. Held for hours it is the case
+      # the guard cannot see by itself: the estimate is built from the newest
+      # hour folders, so a camera whose newest hour is a one-time spike (an
+      # event that wrote ten times an ordinary hour, then went quiet) keeps
+      # the estimate above target forever - the folders that would move the
+      # window never arrive, because the camera stopped recording. Nothing is
+      # lost while this holds (deletion is simply not happening and the
+      # archive keeps growing toward the quota), but the byte target is
+      # fiction and only an operator fixes it: raise KEEP_BYTES, or set
+      # RETENTION_GROWTH_HEADROOM_BYTES=0 to aim at the raw target when the
+      # quota is soft, or pin the real rate instead of the estimate.
+      - alert: RetentionRefusingToDeleteForHeadroom
+        expr: retention_over_budget_bytes{reason="headroom"} > 0
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            Retention has refused every pass for 6 hours on growth headroom
+          description: >-
+            The size target cannot fit the archive plus the estimated growth,
+            so deletion is disabled until the configuration changes. If the
+            estimate is right, the target is simply too small. If the newest
+            hours are a recording spike rather than a rate, the estimate will
+            never drop by itself: check the biggest recent hour folder, and
+            consider RETENTION_GROWTH_HEADROOM_BYTES=0 (soft quota) or a
+            pinned byte value.
 
       - alert: CameraInDeepBackoff
         expr: camera_consecutive_failures >= 5

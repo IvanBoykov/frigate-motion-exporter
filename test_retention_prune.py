@@ -254,6 +254,69 @@ class TestCensusFailure:
         assert len(s3.objects) == 60 * 4
 
 
+class TestGrowthHeadroomSwitch:
+    """`RETENTION_GROWTH_HEADROOM_BYTES=0` is the operator's off switch for
+    reserving growth room: without it, the target is `current + estimate`, and
+    a fat newest hour can make that estimate exceed the target by itself, which
+    stops every deletion for an unbounded time."""
+
+    def _spiky_bucket(self):
+        """One camera, an ordinary archive, and a newest hour that is 10x an
+        ordinary one - a holiday hour, a cat that never left. The size target
+        is well above the archive minus the spike but below spike + estimate,
+        the exact state that pins the switch down."""
+        cam = next(NAMES)
+        s3 = build({cam: 40}, per_hour=2, clip_bytes=50 * 2**20)
+        newest = max(key(cam, h) for h in range(40))
+        folder = newest.rsplit("/", 2)[0]
+        for k in list(s3.objects):
+            if k.startswith(folder):
+                s3.objects[k] = 10 * 2**30
+        return s3
+
+    def test_zero_disables_the_reservation_and_deletion_proceeds(self):
+        s3 = self._spiky_bucket()
+
+        plan = asyncio.run(
+            run_pass(
+                s3,
+                dry_run=False,
+                keep_days=0,
+                keep_bytes=8 * 2**30,
+                growth_headroom_bytes=0,
+                max_delete_percent=100,
+            )
+        )
+
+        assert plan.reason != retention.REASON_HEADROOM
+        assert plan.folders
+        assert s3.deletes
+        # the published gauge says so too: 0 headroom is visible in the metrics
+        assert REGISTRY.get_sample_value("retention_headroom_bytes") == 0
+
+    def test_the_estimate_would_have_stopped_the_same_bucket(self):
+        """Without the switch the same bucket deletes nothing, and the reason
+        is headroom - the pin that the off switch changes behavior rather
+        than passing a knob nobody reads."""
+        s3 = self._spiky_bucket()
+
+        plan = asyncio.run(
+            run_pass(
+                s3,
+                dry_run=True,
+                keep_days=0,
+                keep_bytes=8 * 2**30,
+                max_delete_percent=100,
+            )
+        )
+
+        assert plan.reason == retention.REASON_HEADROOM
+        assert plan.folders == ()
+        assert (
+            REGISTRY.get_sample_value("retention_headroom_bytes") > 8 * 2**30
+        )
+
+
 class TestSupervisor:
     def test_success_waits_the_interval_and_failures_back_off(self):
         slept = []
