@@ -321,8 +321,12 @@ the loop as a plain failure before a closing object is reachable.
 An existing `*-truncated.mp4` counts as covering its window for *both* keys: Frigate's export
 of that window is not going to improve, so re-fetching it every pass would stream the same
 broken body forever. `parse_s3_clip_start` accepts the suffix, which keeps the watermark
-advancing past a truncated clip. `make_s3_key(..., suffix=)` is the only place the suffix is
-built.
+advancing past a truncated clip. Both window-closing suffixes are defined
+once (`TRUNCATED_KEY_SUFFIX` = `-truncated`, kept with the `.mp4` extension;
+`UNAVAILABLE_KEY_SUFFIX` = `-no-recordings`, deliberately extensionless so
+media tooling that selects by suffix skips the marker) and reach a key only
+through `make_s3_key(..., suffix=, extension=)`, via the plain call or
+`make_unavailable_s3_key`.
 
 Track durations from the file are deliberately never used as a length check: with `-c copy`
 FFmpeg carries the input track durations over, so a 29.9 s export can advertise 37.7 s and a
@@ -673,7 +677,12 @@ minimum, and the two camera filters refused together. Also pins the key layout:
 with no prefix set a key is byte-identical to one written before prefixes
 existed (so an existing bucket keeps resuming), and build/parse round-trip only
 inside one layout, which is what makes a changed `S3_PREFIX` show up as an empty
-watermark lookup rather than a wrong one.
+watermark lookup rather than a wrong one. It also keeps the documentation from
+drifting: every name `config.py` quotes must appear in both README and
+`env.example` (the audit found `RETENTION_GROWTH_HEADROOM_BYTES` missing from
+the latter), and a module outside `config.py` reading a new environment
+variable fails the suite unless the exception is `METRICS_PORT`/`METRICS_BIND`,
+the two names AGENTS says deliberately bypass the config layer.
 
 `test_retention_prune.py` pins the headroom off switch end to end: a bucket
 whose newest hour is a 10x spike deletes nothing with the estimate active

@@ -1,6 +1,10 @@
 """Tests for environment configuration and the S3 key prefix."""
 import logging
 import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+SRC_DIR = ROOT / "src"
 
 import pytest
 
@@ -574,3 +578,62 @@ class TestBackfillWindow:
 
         assert cfg.backfill_enabled is True
         assert cfg.retention_dry_run is True
+
+
+class TestConfiguredVariablesAreDocumented:
+    """The audit found RETENTION_GROWTH_HEADROOM_BYTES read by config and
+    explained in README but missing from env.example - the file an operator
+    actually copies. The env var list is the product surface, so drift here
+    is a bug, not a typo.
+
+    Every name config.py quotes is what the layer reads; METRICS_PORT and
+    METRICS_BIND are the documented exceptions, read by metrics.py at bind
+    time (AGENTS, "Two settings deliberately bypass it")."""
+
+    def _config_reads(self):
+        names = re.findall(
+            r'"([A-Z][A-Z0-9_]{3,})"',
+            (SRC_DIR / "config.py").read_text(),
+        )
+        return set(names)
+
+    def test_every_config_variable_appears_in_env_example(self):
+        env_example = (ROOT / "env.example").read_text()
+
+        missing = [
+            name
+            for name in sorted(self._config_reads())
+            if not re.search(r"\b" + name + r"\b", env_example)
+        ]
+        assert missing == []
+
+    def test_every_config_variable_appears_in_the_readme(self):
+        readme = (ROOT / "README.md").read_text()
+
+        missing = [
+            name
+            for name in sorted(self._config_reads())
+            if not re.search(r"\b" + name + r"\b", readme)
+        ]
+        assert missing == []
+
+    def test_only_the_documented_variables_are_read_outside_config(self):
+        outside = set()
+        for module in SRC_DIR.glob("*.py"):
+            if module.name == "config.py":
+                continue
+            outside |= set(
+                re.findall(
+                    r'environ(?:\.get)?\(?\s*["\']([A-Z][A-Z0-9_]{3,})["\']',
+                    module.read_text(),
+                )
+            )
+
+        # FRIGATE_URL/USER/PASSWORD arrive here as documented fallbacks
+        # (make_frigate_client) and are part of the config surface too; the
+        # metrics pair is the bypass AGENTS names. Anything else is a new
+        # environment read that config.py does not validate.
+        assert outside - self._config_reads() == {
+            "METRICS_PORT",
+            "METRICS_BIND",
+        }

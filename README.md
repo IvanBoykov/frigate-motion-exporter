@@ -649,11 +649,12 @@ part handed to the S3 SDK (the SDK rejects a `memoryview` and sends a
 completeness tail window:
 
 ```
-per uploading camera ~= 2 x PART_SIZE + max(2 x 512 KiB, HTTP chunk size)
-
-(The HTTP chunk size is a compiled default - 1 MiB, not an environment
-variable - so the tail window above is fixed unless the code changes.)
+per uploading camera ~= 2 x PART_SIZE + max(2 x TAIL_WINDOW_BYTES, HTTP chunk size)
 ```
+
+`TAIL_WINDOW_BYTES` (256 KiB) and the HTTP chunk size (1 MiB) are both compiled
+defaults, not environment variables, so the tail window above is fixed unless
+the code changes; at 1 MiB the chunk dominates the `max` at defaults.
 
 With the defaults (5 MiB parts, 1 MiB chunks) that is ~11 MiB, plus ~45 MiB of
 process baseline (interpreter, boto3 and its models after the first call).
