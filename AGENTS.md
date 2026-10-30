@@ -168,7 +168,9 @@ names by path throughout, so treat them all as load-bearing.
   deployment is claimed or guaranteed. `alerts-k8s.yml` is the source of truth
   (`prometheus/alerts-k8s_test.yml` and `vmrule.yaml` are generated from it by
   `gen_alerts_k8s_tests.py` and `gen_vmrule.py`; edit the source, regenerate,
-  validate with `promtool check rules` and `promtool test rules`);
+  validate with `promtool check rules` (the source) and `promtool test rules`
+  (the generated test file; `vmrule.yaml` is a VictoriaMetrics CRD promtool
+  cannot parse, so it is validated by the generator and by the cluster));
   `prometheus/README.md` explains the 1m/1m cadence the timings assume and the
   per-alert detection latencies. Deliberately not in CI - nothing here gates a
   build.

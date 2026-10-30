@@ -75,10 +75,11 @@ long window: a partially filled window is evaluated over the samples it has, so
 
 ## Tests
 
-`alerts-k8s_test.yml` holds 28 failure/health scenarios (crash-loop with
+`alerts-k8s_test.yml` holds one scenario per assertion group (crash-loop with
 kubelet backoff, S3 blackhole wedge, quiet camera, catch-up pass, clock
 skew, prefix switch, retention disabled / dry run / wedged pass / foreign
-archive / stopped pruner, ...):
+archive / stopped pruner, ...) - the generator is the list's source of truth,
+so its count is not repeated here:
 
 ```sh
 promtool test rules prometheus/alerts-k8s_test.yml
