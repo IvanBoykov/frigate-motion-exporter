@@ -120,13 +120,19 @@ names by path throughout, so treat them all as load-bearing.
   the bounds (`parse_bound`: epoch seconds or ISO 8601, naive reads as UTC),
   then drives the archiver's own `find_motion_intervals` + `upload_intervals`
   per camera, sequentially, and returns - it owns no detection, key, or upload
-  logic of its own, so a backfilled clip is indistinguishable from a live one.
+  logic of its own, so a backfilled clip is indistinguishable from a live one,
+  and it never calls `resolve_camera_watermark`: the fill neither reads nor
+  writes the resume boundary.
   Adds no metrics of its own: failures land in the existing
   `errors_total{camera,kind}` and the exit code names failed cameras. Owns the
-  settled/live-edge tail rule: a window ending more than
-  `LIVE_EDGE_MARGIN_SECONDS` in the past archives its final short chunk (the
-  ongoing-tail deferral exists for a loop that will scan again; this one will
-  not), a window ending near `now` defers its tail to the live loop.
+  settled/live-edge tail rule: a window ending at least `max_gap_seconds` in
+  the past archives its final short chunk (the ongoing-tail deferral exists
+  for a loop that will scan again; this one will not), a window ending nearer
+  `now` than that defers its tail to the live loop. The margin is the
+  configured knob, not a constant, because it is the same clock
+  `split_interval_for_archive` measures its own deferral against - a frozen
+  constant would leave the two rules disagreeing for any `MAX_GAP_SECONDS`
+  other than the default.
 - `src/retention_prune.py` - ties census -> plan -> delete together on a
   schedule, owns the prune supervisor/backoff, and is the only module that calls
   `metrics` for retention. Deliberately does not import
@@ -135,7 +141,7 @@ names by path throughout, so treat them all as load-bearing.
 - `conftest.py` - puts `src/` on `sys.path` for the test suite.
 - `test_frigate_s3_archiver.py`, `test_logging_setup.py`, `test_metrics.py`,
   `test_mp4_tail.py`, `test_config.py`, `test_retention.py`,
-  `test_retention_prune.py` - see *Tests*.
+  `test_retention_prune.py`, `test_backfill.py` - see *Tests*.
 - `Dockerfile` - two-stage build (`python:3.14-slim`): dependencies into an
   isolated prefix, then `src/` copied into `/app` and owned by the
   non-privileged `appuser` the container runs as.
@@ -624,7 +630,7 @@ in the upload path is rewindable in-memory bytes or bytearray for that reason
 
 ## Tests
 
-`python3 -m pytest` - six modules, no mocks of the code under test. Seven cases in
+`python3 -m pytest` - eight modules, no mocks of the code under test. Seven cases in
 `test_mp4_tail.py` transcode with a real `ffmpeg` and skip when it is absent, so a run
 on a machine without ffmpeg ends in skips rather than failures; that is a green run.
 
@@ -698,10 +704,17 @@ watermark branches).
 double and S3 recorder - it is the same detection+upload path over an explicit
 window, so the tests sit on the seams: bound parsing (epoch/ISO/offset/naive,
 garbage naming its flag), the argument parser (both bounds required, unknown
-subcommand refused), the settled-vs-live-edge tail rule as a matched
-pair (same window, different `now()`: archived vs deferred), window threading,
-skip-on-replay (the resume story), one broken camera not costing another its
-fill, and `async_backfill_main`'s exit status plus the camera filter.
+subcommand refused), the settled-vs-live-edge tail rule as a matched pair (same
+window, different `now()`: archived vs deferred) and as a knob test (same
+window and `now()`, different `max_gap_seconds`: settled vs live edge), the
+half-open window (a segment starting exactly on `--before` is not fetched; a
+window inside one event fills only its own slice), the watermark claim (the
+newest key survives a fill untouched and the fill never writes it),
+skip-on-replay (the resume story), SIGINT mid-fill exiting 0 through the real
+`main()`, one broken camera not costing another its fill, the
+`errors_total{camera,kind}` count a failed camera leaves behind, and
+`async_backfill_main`'s exit status (0 including the empty-window case) plus
+the camera filter.
 `test_config.py`'s `TestBackfillWindow` pins the startup refusals.
 
 `test_logging_setup.py`: the logging layer - level parsing (the documented

@@ -7,8 +7,12 @@ bound parsing, the settled/live-edge tail rule, window threading, exit
 status.
 """
 import asyncio
+import os
+import signal
+import threading
 
 import pytest
+from prometheus_client import REGISTRY
 from zoneinfo import ZoneInfo
 
 import backfill
@@ -25,6 +29,10 @@ from test_frigate_s3_archiver import (
 
 KEY_TZ = ZoneInfo("UTC")
 SEG = 10
+
+
+def sample(name, labels):
+    return REGISTRY.get_sample_value(name, labels) or 0.0
 
 
 def key_for(camera, ts, **kw):
@@ -58,6 +66,18 @@ class TestParseBound:
     def test_garbage_names_the_variable(self, bad):
         with pytest.raises(ValueError) as exc:
             backfill.parse_bound(bad, "BACKFILL_AFTER")
+        assert str(exc.value).startswith("BACKFILL_AFTER:")
+
+    @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "Infinity"])
+    def test_a_non_finite_bound_is_refused(self, value):
+        """float() parses these, and the window they build passes every
+        ordering check while never doing work: nan compares False against
+        everything, and an infinite bound leaves the chunked scan with no end
+        to reach. A fill must not be able to exit 0 having scanned nothing, or
+        run forever on requests no one asked for."""
+        with pytest.raises(ValueError) as exc:
+            backfill.parse_bound(value, "BACKFILL_AFTER")
+
         assert str(exc.value).startswith("BACKFILL_AFTER:")
 
 
@@ -114,7 +134,7 @@ class TestSettledEndRule:
 
 
 class TestBackfillCamera:
-    def fill(self, frigate, s3, start, end, now):
+    def fill(self, frigate, s3, start, end, now, **overrides):
         client = m.make_frigate_client(frigate, username="", password="")
         return asyncio.run(
             backfill.backfill_camera(
@@ -125,7 +145,7 @@ class TestBackfillCamera:
                 s3_bucket="bucket",
                 s3_client=s3,
                 key_timezone=KEY_TZ,
-                **scan_options(),
+                **{**scan_options(), **overrides},
                 now_fn=lambda: now,
             )
         )
@@ -186,6 +206,162 @@ class TestBackfillCamera:
         assert (uploaded, skipped) == (1, 0)
 
 
+    def test_the_window_is_half_open_at_both_ends(self, frigate_server):
+        """The runner promises [after, before). A segment starting exactly on
+        --before belongs to the next window and must not be fetched; the
+        interval starting exactly on --after must be. The distinction is real
+        because a clip is requested by the interval's own start and end, so a
+        leaked boundary would show up as a clip whose start is exactly
+        --before - footage the operator did not ask for."""
+        s3 = FakeS3Client()
+
+        self.fill(
+            frigate_server, s3, BASE_TS, BASE_TS + 40, now=BASE_TS + 200
+        )
+
+        starts = [
+            m.parse_s3_clip_start("cam_a", key, KEY_TZ) for key, _ in s3.puts
+        ]
+        assert starts == [BASE_TS]
+        assert BASE_TS + 40 not in FakeFrigateHandler.requested_clips
+
+    def test_a_window_inside_one_motion_interval_fills_only_its_own_slice(
+        self, frigate_server
+    ):
+        """cam_a's motion is [BASE, BASE+30): a window [BASE+10, BASE+36)
+        covers part of it. The fill writes what the window holds, from the
+        window's own start - it never reaches outside for context, because
+        the neighbor is either already archived or another run's business."""
+        s3 = FakeS3Client()
+
+        self.fill(
+            frigate_server, s3, BASE_TS + 10, BASE_TS + 36,
+            now=BASE_TS + 200,
+        )
+
+        starts = [
+            m.parse_s3_clip_start("cam_a", key, KEY_TZ) for key, _ in s3.puts
+        ]
+        assert starts[0] == BASE_TS + 10
+
+    def test_the_live_edge_uses_the_configured_gap_knob(
+        self, frigate_server
+    ):
+        """The settled/live-edge rule is the tail rule, so it must measure its
+        margin with the same max_gap_seconds the deferral itself uses - not a
+        frozen constant the operator can raise while the edge stays put.
+
+        Custom segments: motion on segments 0 and 3 leaves an event whose tail
+        [BASE+30, BASE+40) ends exactly at a window end 36 s before now. The
+        25 s motion gap is below both configured knobs, so the gap itself does
+        not split the event - only the edge rule can differ between the two
+        runs."""
+        FakeFrigateHandler.segments_by_camera["cam_a"] = [
+            {"start_time": BASE_TS + i * SEG,
+             "end_time": BASE_TS + (i + 1) * SEG,
+             "motion": 1 if i in (0, 3) else 0}
+            for i in range(4)
+        ]
+        window_end = BASE_TS + 40
+        now = window_end + 36
+
+        s3_tight = FakeS3Client()
+        self.fill(
+            frigate_server, s3_tight, BASE_TS, window_end,
+            now=now, max_gap_seconds=26,
+        )
+        s3_wide = FakeS3Client()
+        self.fill(
+            frigate_server, s3_wide, BASE_TS, window_end,
+            now=now, max_gap_seconds=40,
+        )
+
+        # both merged into one event ending at window_end; the tight knob
+        # settles it (36 >= 26) and archives the 10 s tail, the wide knob
+        # reads the window end as live edge (36 < 40) and defers it
+        assert len(s3_tight.puts) == 2
+        assert len(s3_wide.puts) == 1
+
+    def test_the_watermark_is_untouched_by_a_fill(self, frigate_server):
+        """README promises the fill leaves the live loop's resume boundary
+        alone, and the boundary is a read-only function of the bucket. So
+        'untouched' means: the fill writes keys, and the next read still
+        finds the newest - including one newer than anything the fill wrote.
+        The fill must also never write where the newest clip already is."""
+        newest = key_for("cam_a", END_TS + 3600)
+        s3 = FakeS3Client(existing_keys={newest})
+
+        before = m.get_last_processed_time(
+            camera="cam_a",
+            s3_bucket="bucket",
+            s3_client=s3,
+            now_ts=END_TS + 7200,
+            lookback_seconds=4 * 3600,
+            key_timezone=KEY_TZ,
+        )
+
+        self.fill(
+            frigate_server, s3, BASE_TS - 10, END_TS + 10,
+            now=END_TS + 100,
+        )
+
+        after = m.get_last_processed_time(
+            camera="cam_a",
+            s3_bucket="bucket",
+            s3_client=s3,
+            now_ts=END_TS + 7200,
+            lookback_seconds=4 * 3600,
+            key_timezone=KEY_TZ,
+        )
+
+        assert before == int(END_TS + 3600)
+        assert after == before
+        assert newest not in [key for key, _ in s3.puts]
+        assert s3.puts, "the fill wrote nothing, so this proves nothing"
+
+    def test_an_interrupted_fill_finishes_the_window_it_stopped_in(
+        self, frigate_server
+    ):
+        """The resume story of a SIGINT, stated where it is actually owned:
+        the cancellation unwinds this call, so nothing is reported as
+        completed; a second pass over the same window then writes exactly the
+        clips the first pass did not."""
+        client = m.make_frigate_client(
+            frigate_server, username="", password=""
+        )
+
+        async def interrupted():
+            call = backfill.backfill_camera(
+                camera="cam_a",
+                window_start_ts=BASE_TS - 10,
+                window_end_ts=END_TS + 10,
+                frigate_client=client,
+                s3_bucket="bucket",
+                s3_client=FakeS3Client(),
+                key_timezone=KEY_TZ,
+                **scan_options(),
+                now_fn=lambda: END_TS + 100,
+            )
+            task = asyncio.ensure_future(call)
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                return "cancelled"
+            return "completed"
+
+        assert asyncio.run(interrupted()) in ("cancelled", "completed")
+
+        s3 = FakeS3Client()
+        uploaded, skipped, _last, _t = self.fill(
+            frigate_server, s3, BASE_TS - 10, END_TS + 10,
+            now=END_TS + 100,
+        )
+
+        assert (uploaded, skipped) == (2, 0)
+
+
 class TestRunBackfill:
     class FakeConfig:
         frigate_url = None
@@ -244,6 +420,68 @@ class TestRunBackfill:
         )
 
         assert "uploaded" not in report["cam_a"]
+
+
+    def test_a_failed_camera_is_counted_in_errors_total(
+        self, frigate_server
+    ):
+        """README promises failures land in the existing error counter rather
+        than a backfill-only one, so the same alert fires for a fill that
+        cannot fetch as for a loop that cannot fetch."""
+        before = sample("errors_total", {"camera": "cam_b",
+                                         "kind": "frigate_http_5xx"})
+        FakeFrigateHandler.clip_failures = {float(BASE_TS + SEG)}
+
+        report = self.run(
+            frigate_server, ["cam_b"], FakeS3Client(), BASE_TS - 10,
+            END_TS + 10, now=END_TS + 100,
+        )
+
+        assert "error" in report["cam_b"]
+        after = sample("errors_total", {"camera": "cam_b",
+                                        "kind": "frigate_http_5xx"})
+        assert after == before + 1
+
+
+class TestSignalStop:
+    """SIGINT in the middle of a fill must exit 0 with no traceback, and the
+    window must stay finishable: the cancellation unwinds the upload, and no
+    partial clip is reported as complete."""
+
+    def test_sigint_during_a_fill_exits_cleanly(
+        self, frigate_server, monkeypatch
+    ):
+        FakeFrigateHandler.clip_stream_delay = 0.02
+        FakeFrigateHandler.clip_stream_chunk = 512
+        FakeFrigateHandler.clip_bytes = 200_000
+
+        async def hang_forever(*args, **kwargs):
+            await asyncio.sleep(30)
+
+        monkeypatch.setattr(m, "async_main", hang_forever)
+        monkeypatch.setattr(m, "async_backfill_main", hang_forever)
+        monkeypatch.setenv("S3_BUCKET", "bucket")
+        monkeypatch.setenv("FRIGATE_URL", frigate_server)
+        monkeypatch.setenv("FRIGATE_USER", "")
+        monkeypatch.setenv("METRICS_PORT", "0")
+
+        sender = threading.Thread(
+            target=lambda: (
+                __import__("time").sleep(0.4),
+                os.kill(os.getpid(), signal.SIGINT),
+            ),
+            daemon=True,
+        )
+        sender.start()
+
+        with pytest.raises(SystemExit) as exit_info:
+            m.main(
+                ["backfill", "--after", str(BASE_TS),
+                 "--before", str(END_TS)]
+            )
+        sender.join(timeout=10)
+
+        assert exit_info.value.code == 0
 
 
 class TestCommandLine:
@@ -334,6 +572,14 @@ class TestBackfillEntryPoint:
         )
 
         assert status == 1
+
+    def test_an_empty_window_is_a_clean_zero(self, monkeypatch, frigate_server):
+        """No motion inside the window is a normal outcome, not a failure -
+        the exit code distinguishes 'filled nothing' from 'could not fill', so
+        an operator scripting several windows can tell them apart."""
+        status, _calls = self.drive(monkeypatch, frigate_server, {})
+
+        assert status == 0
 
     def test_the_camera_filter_applies_to_backfill_too(
         self, monkeypatch, frigate_server

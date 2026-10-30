@@ -479,45 +479,67 @@ A backfill is the operator-driven fix: one pass per camera over an explicitly
 named window, then the process exits.
 
 ```
-docker compose run --rm exporter backfill \
+docker compose run --rm frigate-motion-exporter \
+  python frigate_s3_archiver.py backfill \
   --after 2026-10-01T00:00:00+03:00 --before 2026-10-04T00:00:00+03:00
 ```
+
+The image has no `ENTRYPOINT`, so a `docker compose run` argument list
+replaces the whole command rather than appending to it - hence the explicit
+`python frigate_s3_archiver.py`. `docker compose run` uses `compose.yaml`'s
+`env_file`, so the bucket and credentials come from the same `.env` the
+service reads; nothing about the fill is configured outside this command.
 
 The window is a subcommand and two flags, never environment variables. That
 is deliberate: the fill is a one-off manual action, and keeping it out of the
 service's env means a leftover `BACKFILL_AFTER` can never turn the next
 daemon restart into a bulk re-fetch - and the shell history that recorded the
-gap is the one that replays it. The same `env_file` the service uses supplies
-the credentials and the bucket.
+gap is the one that replays it.
 
-- Both bounds or none; a missing one is refused by the argument parser
-  (`--after`/`--before` are required together). Values are epoch seconds or
-  ISO 8601 (`Z` or an offset; a naive value reads as UTC), and the start log
-  echoes both bounds back in `S3_KEY_TIMEZONE` so you see the instant meant.
-  `--after >= --before` is refused at startup too - an empty or inverted
-  window would exit 0 having archived nothing.
+- Both bounds, always; a missing one is refused by the argument parser.
+  Values are epoch seconds or ISO 8601 (`Z` or an offset; a naive value reads
+  as UTC), and the start log echoes both bounds back in `S3_KEY_TIMEZONE` so
+  you see the instant meant. The interval is half-open, `[--after,
+  --before)`: a segment starting exactly on `--before` belongs to the next
+  window, which is what makes adjacent windows fillable without overlap.
+  `--after >= --before` is refused at startup - an empty or inverted window
+  would exit 0 having archived nothing.
 - Camera selection works as usual (`CAMERAS_INCLUDE`/`CAMERAS_EXCLUDE`), so
   one broken camera's gap can be filled alone. Cameras run sequentially on
   purpose: peak memory scales with concurrent uploaders, and a catch-up has
   no latency target. A camera that fails does not stop the others; the
-  process exits 1 naming them, `errors_total{kind=...}` counts the failure.
+  process exits 1 naming them, and `errors_total{camera,kind}` counts each
+  failure under the same kinds the live loop reports. A window that simply
+  held no motion exits 0 - "nothing to fill" is not "could not fill", so a
+  script covering several gaps can tell them apart.
 - The run is resumable by construction: every clip is a key the uploader
   skips when present, so re-running the same window after an interruption
   re-fetches only what is missing. Interrupting it with SIGINT/SIGTERM is
-  safe the same way any other interruption is.
-- The watermark is untouched - the fill writes ordinary keys, and the live
-  loop's resume keeps its single source of truth. A window entirely below
-  the watermark (the gap case) fills without moving it; a window ending near
-  `now` defers its final tail to the live loop, exactly as the loop defers
-  its own ongoing events.
+  safe the same way any other interruption is (exit 0, no traceback), which
+  makes the resume above the documented recovery rather than a hope.
+- The fill writes ordinary keys and never reads the watermark, so the resume
+  position keeps its single source of truth: the bucket. A window below the
+  watermark - the gap case - fills without moving it at all; a window above it
+  advances the next resume to the newest clip, which is correct because that
+  footage really is archived now. Neither can skip anything, because the
+  boundary is derived from keys, not from state this process keeps. A window
+  ending near `now` defers its final short tail to the live loop, and the
+  margin that decides "near now" is `MAX_GAP_SECONDS` - the same knob the live
+  loop's own tail deferral is measured against, so widening it for a camera
+  that drops segments widens the live edge here too.
+- Metrics are served while a fill runs, because the process is the same one
+  with the same startup. On a host where the archiver is already running,
+  that second `:9108` bind fails the fill at startup, so set `METRICS_PORT=0`
+  (an ephemeral port) for a host-run fill. In the `docker compose run` form
+  above the port is inside the container's namespace and needs nothing.
 - Retention deletion cannot be enabled in a backfill process
-  (`RETENTION_DRY_RUN=false` in the env is refused at startup): whichever order one
-  process ran them in, the prune pass would judge the archive against the
-  state before the fill. Run the backfill first, then the normal process.
-  The day-threshold age cap does not apply inside the fill - you asked for
-  this footage by name - but the next prune pass still deletes what falls
-  outside `RETENTION_KEEP_DAYS`: a backfill durably fills only gaps your
-  retention thresholds would keep.
+  (`RETENTION_DRY_RUN=false` in the env is refused at startup): whichever
+  order one process ran them in, the prune pass would judge the archive
+  against the state before the fill. Run the backfill first, then the normal
+  process. The day-threshold age cap does not apply inside the fill - you
+  asked for this footage by name - but the next prune pass still deletes what
+  falls outside `RETENTION_KEEP_DAYS`: a backfill durably fills only gaps
+  your retention thresholds would keep.
 
 ### Retention (deleting old footage)
 
@@ -627,7 +649,10 @@ part handed to the S3 SDK (the SDK rejects a `memoryview` and sends a
 completeness tail window:
 
 ```
-per uploading camera ~= 2 x PART_SIZE + max(2 x 512 KiB, HTTP_CHUNK_SIZE)
+per uploading camera ~= 2 x PART_SIZE + max(2 x 512 KiB, HTTP chunk size)
+
+(The HTTP chunk size is a compiled default - 1 MiB, not an environment
+variable - so the tail window above is fixed unless the code changes.)
 ```
 
 With the defaults (5 MiB parts, 1 MiB chunks) that is ~11 MiB, plus ~45 MiB of

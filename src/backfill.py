@@ -10,10 +10,11 @@ pass per camera over an explicit [after, before), then the process exits.
 
 What the mode deliberately does not touch:
 
-- The watermark. A backfill writes the same keys the normal loop writes, so
-  the resume position keeps its single source of truth - S3 itself. The
-  window may sit below the watermark (the gap case), across it, or above it;
-  none of them move the live loop's boundary.
+- The watermark. A backfill reads no state and writes the same keys the
+  normal loop writes, so the resume position keeps its single source of
+  truth - S3 itself. A window below the boundary (the gap case) fills without
+  moving it; one above it advances the next resume to the newest clip, which
+  is correct: that footage is archived now.
 - Retention. The pass ignores the upload age cap: footage the operator named
   is not "doomed by the day threshold", which is what the cap protects
   against. If it is older than RETENTION_KEEP_DAYS, the next prune pass
@@ -30,6 +31,7 @@ the uploader skips when present, so an interrupted backfill resumes by
 re-issuing the same window.
 """
 import logging
+import math
 import time
 
 import frigate_s3_archiver as archiver
@@ -37,11 +39,6 @@ import logging_setup
 import metrics
 
 log = logging.getLogger("backfill")
-
-# A window ending closer to now than this touches the live edge, and its tail
-# is deferred exactly as the live loop defers its own; an older window is
-# settled and archives its tail outright.
-LIVE_EDGE_MARGIN_SECONDS = archiver.DEFAULT_MAX_GAP_SECONDS
 
 
 def parse_bound(value, name):
@@ -52,14 +49,27 @@ def parse_bound(value, name):
     a zone offset is honored, a naive value is read as UTC - and the runner
     logs every bound back through human_ts in the key timezone, so the
     operator sees the instant that was actually meant.
+
+    Finite only: ``float()`` accepts ``nan`` and ``inf``, and both read as
+    valid numbers until they are compared. A nan window fails every ordering
+    check (``nan >= nan`` is False) and then scans nothing while exiting 0; an
+    infinite bound makes the chunked scan never reach its end, one Frigate
+    request per chunk forever. Both are startup refusals, not run results.
     """
     raw = str(value).strip()
     if not raw:
         raise ValueError(f"{name}: is empty")
     try:
-        return float(raw)
+        numeric = float(raw)
     except ValueError:
         pass
+    else:
+        if not math.isfinite(numeric):
+            raise ValueError(
+                f"{name}: {value!r} is not a finite timestamp; name the"
+                " instant you mean, in epoch seconds or ISO 8601"
+            )
+        return numeric
     from datetime import datetime, timezone
 
     normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
@@ -99,11 +109,21 @@ async def backfill_camera(
 ):
     """Archive one camera's motion intervals inside [start, end).
 
+    The window is scanned as a settled range - its final short chunk is
+    archived outright - unless its end is still inside the detector's own
+    settlement margin of now. The live loop defers a tail close to the scan
+    boundary because the event may still be running; inside a historical
+    window every segment is closed, and this pass has no next pass to defer
+    to. The margin is ``max_gap_seconds``, the same knob the deferral inside
+    ``split_interval_for_archive`` is measured against, so widening it (for a
+    camera that drops segments) widens the live edge here too instead of
+    leaving the two rules on different clocks.
+
     Returns the ``upload_intervals`` result; raises on the first failed clip
     or Frigate error, like the live pass - a half-archived window must not
     report success.
     """
-    settled_end = window_end_ts <= now_fn() - LIVE_EDGE_MARGIN_SECONDS
+    settled_end = window_end_ts <= float(now_fn()) - float(max_gap_seconds)
     intervals = await archiver.find_motion_intervals(
         camera=camera,
         after_ts=window_start_ts,
@@ -183,6 +203,7 @@ async def run_backfill(
                 key_timezone=config.s3_key_timezone,
                 part_size=config.s3_part_size,
                 http_timeout=config.http_timeout,
+                http_chunk_size=archiver.DEFAULT_HTTP_CHUNK_SIZE,
                 clip_retries=config.clip_retries,
                 clip_retry_max_delay=config.clip_retry_max_delay_seconds,
                 max_gap_seconds=config.max_gap_seconds,
