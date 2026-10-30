@@ -2440,7 +2440,7 @@ def test_sigint_exits_cleanly_through_the_main_path(frigate_server, monkeypatch)
     sender.start()
 
     with pytest.raises(SystemExit) as exit_info:
-        m.main()
+        m.main([])
     sender.join(timeout=10)
 
     assert exit_info.value.code == 0
@@ -2470,7 +2470,7 @@ def test_signal_during_camera_discovery_exits_cleanly(frigate_server, monkeypatc
     )
     sender.start()
     with pytest.raises(SystemExit) as exit_info:
-        m.main()
+        m.main([])
     sender.join(timeout=10)
 
     assert exit_info.value.code == 0
@@ -2499,7 +2499,7 @@ def test_metrics_port_is_free_after_a_signal_stop(frigate_server, monkeypatch):
     sender = threading.Thread(target=send_int, daemon=True)
     sender.start()
     with pytest.raises(SystemExit) as exit_info:
-        m.main()
+        m.main([])
     sender.join(timeout=10)
 
     assert exit_info.value.code == 0
@@ -2944,7 +2944,7 @@ def test_main_exits_one_when_the_camera_selection_is_empty(
     caplog.set_level(logging.INFO, logger="frigate_s3_archiver")
 
     with pytest.raises(SystemExit) as exit_info:
-        m.main()
+        m.main([])
 
     assert exit_info.value.code == 1
     errors = [
@@ -2971,7 +2971,7 @@ def test_main_logs_the_fatal_supervisor_path_as_one_error_record(
     caplog.set_level(logging.INFO, logger="frigate_s3_archiver")
 
     with pytest.raises(SystemExit) as exit_info:
-        m.main()
+        m.main([])
 
     assert exit_info.value.code == 1
     errors = [
@@ -3015,7 +3015,7 @@ def test_main_exits_one_when_startup_discovery_gives_up(
     caplog.set_level(logging.INFO, logger="frigate_s3_archiver")
 
     with pytest.raises(SystemExit) as exit_info:
-        m.main()
+        m.main([])
 
     assert exit_info.value.code == 1
     text = [
@@ -3050,7 +3050,7 @@ def _main_warnings(frigate_server, monkeypatch, caplog, key_timezone=None):
     )
     sender.start()
     with pytest.raises(SystemExit):
-        m.main()
+        m.main([])
     sender.join(timeout=10)
     return [
         record

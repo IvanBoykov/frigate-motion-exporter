@@ -91,11 +91,15 @@ names by path throughout, so treat them all as load-bearing.
   Two settings deliberately bypass it: `METRICS_PORT`/`METRICS_BIND` are read by
   `src/metrics.py` at bind time, and `make_frigate_client` falls back to
   `FRIGATE_USER`/`FRIGATE_PASSWORD` when called without explicit credentials.
-  The backfill window is cross-checked there too (`_backfill_window`): both
-  bounds or neither, `after < before`, and never together with
-  `RETENTION_DRY_RUN=false` - one process would let the prune pass judge the
-  archive against the state before the fill. `Config.backfill_enabled` is the
-  single switch `main()` reads to pick the runner.
+  The backfill window reaches it as `load_config(backfill_raw=(...))` - the
+  raw CLI strings of the `backfill` subcommand, not environment variables, so
+  a leftover `BACKFILL_AFTER` in the service env can never switch a daemon
+  into a bulk re-fetch (`parse_args` reads argv; no subcommand, no fill). It
+  is cross-checked in `_backfill_window`: `after < before`, and never together
+  with `RETENTION_DRY_RUN=false` - one process would let the prune pass judge
+  the archive against the state before the fill. A missing bound never reaches
+  this layer: argparse requires both. `Config.backfill_enabled` is the single
+  switch `main()` reads to pick the runner.
 - `src/archive_census.py` - one full listing of the archive prefix, reduced to
   per-camera per-hour-folder totals (bytes/keys) plus the foreign-key residue,
   with memory bounded by cameras x hours rather than clip count. Nothing else
@@ -109,8 +113,9 @@ names by path throughout, so treat them all as load-bearing.
   prefix - the only prefix guard; a plan and executor disagreeing about the
   prefix deletes nothing, because every key classifies UNKNOWN. Touches no key
   outside the planned folders. No policy.
-- `src/backfill.py` - the operator's one-shot catch-up over an explicit
-  `[BACKFILL_AFTER, BACKFILL_BEFORE)` window, for downtime deeper than
+- `src/backfill.py` - the operator's one-shot catch-up over the explicit
+  `[--after, --before)` window of the `backfill` subcommand, for downtime
+  deeper than
   `FIRST_RUN_LOOKBACK_SECONDS` (the loop never looks there by design). Parses
   the bounds (`parse_bound`: epoch seconds or ISO 8601, naive reads as UTC),
   then drives the archiver's own `find_motion_intervals` + `upload_intervals`
@@ -692,7 +697,8 @@ watermark branches).
 `test_backfill.py`: the backfill mode against the archiver suite's own Frigate
 double and S3 recorder - it is the same detection+upload path over an explicit
 window, so the tests sit on the seams: bound parsing (epoch/ISO/offset/naive,
-garbage naming its variable), the settled-vs-live-edge tail rule as a matched
+garbage naming its flag), the argument parser (both bounds required, unknown
+subcommand refused), the settled-vs-live-edge tail rule as a matched
 pair (same window, different `now()`: archived vs deferred), window threading,
 skip-on-replay (the resume story), one broken camera not costing another its
 fill, and `async_backfill_main`'s exit status plus the camera filter.
@@ -838,7 +844,7 @@ constraint long before Frigate's retention: downtime > `first_run_lookback`
 skips footage that Frigate still has. Raising `first_run_lookback_seconds` to
 something under 35 days is the cheapest durability win available, but it pays
 a deep scan on *every* cold restart; the targeted alternative is the one-shot
-backfill mode (`BACKFILL_AFTER`/`BACKFILL_BEFORE`), which fetches exactly the
+backfill mode (`backfill --after TS --before TS`), which fetches exactly the
 gap once and exits, leaving the watermark alone either way.
 
 ## Dependencies

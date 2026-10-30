@@ -312,49 +312,46 @@ class Config:
         )
 
 
-def _backfill_window(environ):
+def _backfill_window(backfill_raw, environ):
     """The explicit [after, before) of a one-shot backfill, or (None, None).
 
     A backfill is the operator's answer to "the outage outlived the
     FIRST_RUN_LOOKBACK_SECONDS window": one pass over exactly these bounds,
-    then exit. The window is parsed here (epoch seconds or ISO, via
-    backfill.parse_bound) so a typo names its variable at startup rather
+    then exit. The bounds arrive as the CLI strings of the ``backfill``
+    subcommand - the mode is a manual action, so it is named on the command
+    line, and no environment variable can switch a running service into it.
+    Parsing the strings is still this layer's job (epoch seconds or ISO, via
+    ``backfill.parse_bound``, imported inside the function: backfill imports
+    the archiver at module scope, and the archiver imports this module only
+    from ``main()``, so a top-level import would close the cycle the
+    retention modules also route around), so a typo fails at startup rather
     than after the first clip.
 
     Cross-checks, all refused at startup:
-    - only one bound: half a window is not a bound - the point of the mode
-      is that a human said how far back;
     - after >= before: an empty or inverted window archives nothing while
-      reading like a successful run;
-    - backfill + RETENTION_DRY_RUN=false: one process would delete archive
-      on a threshold computed against the archive before the fill, then
-      write the clips back - both orderings lose, so the modes are separate
-      processes and the operator runs them in the order they meant.
+      reading like a successful run (a missing bound is refused by the
+      argument parser, which requires both);
+    - backfill + RETENTION_DRY_RUN=false: one process would delete archive on
+      a threshold computed against the archive before the fill, then write the
+      clips back - both orderings lose, so the modes are separate processes
+      and the operator runs them in the order they meant.
     """
-    raw_after = _present(environ, "BACKFILL_AFTER")
-    raw_before = _present(environ, "BACKFILL_BEFORE")
-    if raw_after is None and raw_before is None:
+    if backfill_raw is None:
         return None, None
-    if raw_after is None or raw_before is None:
-        missing = "BACKFILL_AFTER" if raw_after is None else "BACKFILL_BEFORE"
-        raise ConfigError(
-            missing,
-            "a backfill window has two bounds; set " + missing
-            + " (epoch seconds or ISO 8601) or unset both to run the"
-            " normal loop",
-        )
+    raw_after, raw_before = backfill_raw
+
     import backfill
 
     try:
-        after = backfill.parse_bound(raw_after, "BACKFILL_AFTER")
-        before = backfill.parse_bound(raw_before, "BACKFILL_BEFORE")
+        after = backfill.parse_bound(raw_after, "--after")
+        before = backfill.parse_bound(raw_before, "--before")
     except ValueError as exc:
         variable, _, detail = str(exc).partition(":")
         raise ConfigError(variable, detail.strip()) from None
     if after >= before:
         raise ConfigError(
-            "BACKFILL_AFTER",
-            f"must be before BACKFILL_BEFORE; got a window"
+            "--after",
+            f"must be before --before; got a window"
             f" [{after!r}, {before!r}) that archives nothing",
         )
     if _flag(environ, "RETENTION_DRY_RUN", True) is False:
@@ -368,15 +365,19 @@ def _backfill_window(environ):
     return after, before
 
 
-def load_config(environ=None):
+def load_config(environ=None, backfill_raw=None):
     """Read every tuning knob from the environment.
 
-    ``environ`` exists for tests; production calls take the real environment.
+    ``backfill_raw`` is the only value not read here: the backfill window is a
+    command-line argument, and it is passed as the two raw strings (or None)
+    so its parsing and its retention cross-check stay in this layer with every
+    other value's. ``environ`` exists for tests; production calls take the
+    real environment.
     """
-    return _load(os.environ if environ is None else environ)
+    return _load(os.environ if environ is None else environ, backfill_raw)
 
 
-def _load(environ):
+def _load(environ, backfill_raw=None):
     bucket = _present(environ, "S3_BUCKET")
     if not bucket:
         raise SystemExit(
@@ -418,7 +419,7 @@ def _load(environ):
             f"must be >= CAMERA_RESTART_BACKOFF_SECONDS ({backoff})",
         )
 
-    backfill_after, backfill_before = _backfill_window(environ)
+    backfill_after, backfill_before = _backfill_window(backfill_raw, environ)
 
     return Config(
         frigate_url=_present(environ, "FRIGATE_URL")

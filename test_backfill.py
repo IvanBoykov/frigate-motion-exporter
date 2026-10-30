@@ -246,6 +246,43 @@ class TestRunBackfill:
         assert "uploaded" not in report["cam_a"]
 
 
+class TestCommandLine:
+    """The window is a command-line argument on purpose: the fill must not
+    be reachable from the service's environment, where one leftover variable
+    would turn the next daemon restart into a bulk re-fetch."""
+
+    def test_no_subcommand_is_the_loop(self):
+        args = m.parse_args([])
+
+        assert args.command is None
+        assert not hasattr(args, "after")
+
+    def test_backfill_takes_both_bounds(self):
+        args = m.parse_args(
+            ["backfill", "--after", "10", "--before", "20"]
+        )
+
+        assert (args.command, args.after, args.before) == (
+            "backfill",
+            "10",
+            "20",
+        )
+
+    def test_one_bound_is_refused_by_the_parser(self):
+        """Half a window never reaches the config layer, so no ConfigError
+        path exists for it: argparse exits naming the missing flag."""
+        with pytest.raises(SystemExit) as excinfo:
+            m.parse_args(["backfill", "--after", "10"])
+
+        assert excinfo.value.code == 2
+
+    def test_an_unknown_subcommand_is_refused(self):
+        with pytest.raises(SystemExit) as excinfo:
+            m.parse_args(["prune", "--after", "1", "--before", "2"])
+
+        assert excinfo.value.code == 2
+
+
 class TestBackfillEntryPoint:
     """async_backfill_main: discovery + filters + window threading + exit."""
 
@@ -267,9 +304,8 @@ class TestBackfillEntryPoint:
                 "FRIGATE_USER": "",
                 "FRIGATE_PASSWORD": "",
                 "METRICS_PORT": "0",
-                "BACKFILL_AFTER": str(BASE_TS),
-                "BACKFILL_BEFORE": str(END_TS),
-            }
+            },
+            backfill_raw=(str(BASE_TS), str(END_TS)),
         )
 
         return asyncio.run(m.async_backfill_main(config=cfg)), calls
@@ -319,10 +355,9 @@ class TestBackfillEntryPoint:
                 "FRIGATE_USER": "",
                 "FRIGATE_PASSWORD": "",
                 "METRICS_PORT": "0",
-                "BACKFILL_AFTER": str(BASE_TS),
-                "BACKFILL_BEFORE": str(END_TS),
                 "CAMERAS_INCLUDE": "cam_a",
-            }
+            },
+            backfill_raw=(str(BASE_TS), str(END_TS)),
         )
 
         status = asyncio.run(m.async_backfill_main(config=cfg))

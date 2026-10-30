@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import logging
 import math
@@ -2065,7 +2066,7 @@ async def run_until_signalled(coro):
 
 
 async def async_backfill_main(config, now_fn=time.time):
-    """One-shot backfill: fill [BACKFILL_AFTER, BACKFILL_BEFORE) and exit.
+    """One-shot backfill: fill the [--after, --before) window and exit.
 
     Same startup shape as async_main - metrics listener, discovery, the same
     camera filters - and deliberately none of its lifetime: no supervisors,
@@ -2123,13 +2124,59 @@ async def async_backfill_main(config, now_fn=time.time):
         metrics.shutdown_metrics_server()
 
 
-def main():
-    """Load the environment configuration and archive until interrupted."""
+def parse_args(argv=None):
+    """The command line: no subcommand is the loop, `backfill` is the fill.
+
+    The window is an argument, not an environment variable, for two reasons.
+    It is a one-off manual action - keeping it out of the service's env means
+    a leftover BACKFILL_AFTER cannot silently turn the next restart of the
+    daemon into a bulk re-fetch. And the shell history that records the gap
+    being filled is the same history that then replays it.
+
+    argparse requires both bounds, so half a window never reaches the
+    configuration layer; what stays there is the parse of each value and the
+    retention cross-check.
+    """
+    parser = argparse.ArgumentParser(
+        prog="frigate_s3_archiver.py",
+        description="Archive Frigate motion clips to S3. Without a"
+        " subcommand, run the continuous loop until signalled.",
+    )
+    subcommands = parser.add_subparsers(dest="command")
+    fill = subcommands.add_parser(
+        "backfill",
+        help="one pass over an explicit window, then exit (manual"
+        " catch-up after deep downtime)",
+        description="Archive every motion interval inside"
+        " [after, before) for each selected camera, then exit. Already"
+        " archived clips skip, so an interrupted fill resumes by re-running"
+        " the same window. The watermark and the live loop are untouched.",
+    )
+    bound_help = (
+        "epoch seconds or ISO 8601 (e.g. 2026-10-01T00:00:00+03:00; a"
+        " trailing Z or a naive value means UTC)"
+    )
+    fill.add_argument("--after", required=True, metavar="TS", help="window start, inclusive: " + bound_help)
+    fill.add_argument("--before", required=True, metavar="TS", help="window end, exclusive: " + bound_help)
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    """Load the environment configuration and archive until interrupted.
+
+    ``argv`` exists for tests, which must not have their own pytest arguments
+    parsed as a subcommand; production runs read the real command line.
+    """
     # Imported here rather than at module scope: config reads the DEFAULT_*
     # constants from this module, so importing it at the top would be circular.
     from config import load_config, timezone_collapses_hours
 
-    config = load_config()
+    args = parse_args(argv)
+    config = load_config(
+        backfill_raw=(args.after, args.before)
+        if args.command == "backfill"
+        else None
+    )
     logging_setup.configure_logging(
         level=config.log_level,
         json_format=config.log_json,
