@@ -38,9 +38,10 @@ DEFAULT_RECORDINGS_TIMEOUT = 30
 
 DEFAULT_HTTP_CHUNK_SIZE = 1024 * 1024
 DEFAULT_PART_SIZE = 5 * 1024 * 1024
-# Every multipart part but the last must reach this size, so a smaller part
-# size fails complete_multipart_upload() after the whole clip was streamed.
-# Keep this and DEFAULT_PART_SIZE consistent; tests rely on the default.
+# The AWS S3 specification: every multipart part but the last must reach this
+# size. Some S3-compatible endpoints take smaller parts without complaining,
+# which is no reason to diverge from AWS. Keep this and DEFAULT_PART_SIZE
+# consistent; tests rely on the default.
 MIN_MULTIPART_PART_SIZE = 5 * 1024 * 1024
 DEFAULT_HTTP_TIMEOUT = 300
 
@@ -1351,7 +1352,8 @@ async def upload_clip_hybrid(
     if part_size < MIN_MULTIPART_PART_SIZE:
         raise ValueError(
             f"part_size must be at least "
-            f"{MIN_MULTIPART_PART_SIZE} (the S3 minimum for multipart parts)"
+            f"{MIN_MULTIPART_PART_SIZE} (the AWS S3 minimum for "
+            f"multipart parts)"
         )
     if http_chunk_size <= 0:
         raise ValueError("http_chunk_size must be > 0")

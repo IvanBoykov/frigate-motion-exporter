@@ -97,8 +97,7 @@ names by path throughout, so treat them all as load-bearing.
   rejects what `parse_size` is lenient about (trailing junk, prefix-letter
   units, non-ASCII digits) - a misread size target deletes footage. The
   below-floor part-size refusal is not the only guard: `upload_clip_hybrid`
-  raises its own `ValueError` at entry, before Frigate is contacted, so the
-  complete_multipart_upload it protects never begins. A
+  raises at entry too, before Frigate is contacted. A
   below-minimum refusal quotes the floor in bytes and in `format_size(binary)`
   (`5242880 (5 MiB)`), the parser's own inverse.
   It imports the `DEFAULT_*` constants from `frigate_s3_archiver` (one direction

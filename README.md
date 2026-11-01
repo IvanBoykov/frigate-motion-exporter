@@ -169,9 +169,9 @@ library, so `KB/MB/GB/...` are decimal multiples (as S3 counts them) and
 Units are case-insensitive and may be spelled out or reduced to a prefix letter
 (`400 gigabytes`, `400 gib`, `400 G`). Anything that is not a number with an
 optional unit is refused at startup, trailing junk included (`400 GB extra`): a
-misread `KEEP_BYTES` deletes footage, and a too-small `S3_PART_SIZE` would fail
-the upload only after the whole clip was streamed - the config check is what
-makes an `.env` typo a startup message instead.
+misread `KEEP_BYTES` deletes footage, and `S3_PART_SIZE` below the 5 MiB
+multipart minimum of the AWS S3 specification is refused as a startup message
+instead of a mid-run upload failure.
 
 Two optional variables outside this file's list reduce the process's memory:
 setting `MALLOC_ARENA_MAX=1` cuts peak RSS 17-37 % at no measurable CPU cost,
@@ -366,7 +366,7 @@ Optional, affecting where and how objects are written:
 | --- | --- | --- |
 | `S3_PREFIX` | Key prefix, e.g. `frigate` -> `frigate/cam/...`. Normalized: no leading slash, exactly one trailing slash | unset - keys start at the camera name |
 | `S3_KEY_TIMEZONE` | IANA zone the date/hour folder in the key is rendered in | `UTC` |
-| `S3_PART_SIZE` | Multipart part size - a human size or plain bytes, see [Configuration](#configuration); must be at least the 5 MiB S3 minimum | `5242880` (`5MiB`) |
+| `S3_PART_SIZE` | Multipart part size - a human size or plain bytes, see [Configuration](#configuration); must be at least the 5 MiB AWS S3 minimum | `5242880` (`5MiB`) |
 
 Credentials, region, endpoint - standard AWS/boto3 chain, first match wins:
 
