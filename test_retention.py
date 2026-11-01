@@ -358,6 +358,43 @@ def build_unsorted(rooms, per_hour=4, clip_bytes=1024):
     return s3
 
 
+def test_a_listing_that_dies_mid_pagination_yields_no_census():
+    """A transient fault on page N must not yield a census of pages 1..N-1.
+
+    A partial census would under-report total_bytes and hand the planner a
+    plan built on part of the archive; the failure must propagate to the
+    supervisor's backoff instead.
+    """
+    s3 = build({"a": 60}, page_size=2)
+
+    class MidPagination(FakeS3):
+        def __init__(self, base, fail_from):
+            super().__init__(objects=dict(base.objects), page_size=2)
+            self.fail_from = fail_from
+            self.pages = 0
+
+        def get_paginator(self, operation_name):
+            outer = self
+            inner = super().get_paginator(operation_name)
+
+            class Flaky:
+                def paginate(self_, Bucket, Prefix=""):
+                    for page in inner.paginate(Bucket=Bucket, Prefix=Prefix):
+                        outer.pages += 1
+                        if outer.pages >= outer.fail_from:
+                            raise ClientError(
+                                {"Error": {"Code": "503"}}, "ListObjectsV2"
+                            )
+                        yield page
+
+            return Flaky()
+
+    broken = MidPagination(s3, fail_from=2)
+
+    with pytest.raises(ClientError):
+        take(broken, floor_hours=24)
+
+
 def test_unsorted_listing_stops_the_census():
     """The floor is a window over arrival order, so an endpoint that does not
     sort would protect a scattered subset of hours while still reporting a full
@@ -774,6 +811,128 @@ def test_executor_relists_a_folder_it_deleted_too_early():
     assert freed >= 0
     assert not any(deleted.startswith(folder) for deleted in s3.deletes)
 
+
+
+class _FailingListings(FakeS3):
+    """FakeS3 whose folder-prefix listings raise, the way a 502/403/timeout does.
+
+    The census lists the prefix root; the executor re-lists hour folders
+    (five path components under the prefix). Failing only the deep listings
+    lets a plan be built and then breaks exactly the executor's re-check.
+    """
+
+    def __init__(self, *args, error_code="AccessDenied", **kw):
+        super().__init__(*args, **kw)
+        self.error_code = error_code
+
+    def get_paginator(self, operation_name):
+        inner = super().get_paginator(operation_name)
+
+        class Guarded:
+            def paginate(self_, Bucket, Prefix=""):
+                if len(Prefix.rstrip("/").split("/")) > 3:
+                    raise ClientError(
+                        {"Error": {"Code": self.error_code}}, "ListObjectsV2"
+                    )
+                return inner.paginate(Bucket=Bucket, Prefix=Prefix)
+
+        return Guarded()
+
+
+def test_a_folder_that_cannot_be_relisted_is_never_deleted():
+    """The re-check is the delete gate: a listing error aborts the pass.
+
+    A transient 502/timeout (or a 403 that arrived after the census) must
+    not degrade into "delete what we remember from the census" - the plan's
+    key list is exactly the state the failed listing exists to re-validate.
+    """
+    s3 = build({"a": 40})
+    result = take(s3, floor_hours=24)
+    plan = rt.build_plan(result, keep_bytes=None, max_delete_percent=100)
+    broken = _FailingListings(objects=dict(s3.objects))
+
+    with pytest.raises(ClientError):
+        rd.execute_plan(
+            broken, "bucket", plan, prefix=PREFIX, key_timezone=TZ
+        )
+
+    assert broken.deletes == []
+    assert broken.objects == s3.objects
+
+
+def test_a_hard_delete_error_aborts_without_the_per_key_fallback():
+    """403 on the batch call is a real S3 condition, not a missing feature.
+
+    Falling back per-key would hammer the endpoint with a thousand singles
+    against the same refusal, and any continuation of the folder loop would
+    delete later folders against the same broken auth; both are forbidden.
+    """
+    s3 = build({"a": 40})
+    result = take(s3, floor_hours=24)
+    plan = rt.build_plan(result, keep_bytes=None, max_delete_percent=100)
+
+    class Refusing(FakeS3):
+        def delete_objects(self, Bucket, Delete, Quiet=False):
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "DeleteObjects")
+
+    refusing = Refusing(objects=dict(s3.objects))
+
+    with pytest.raises(ClientError):
+        rd.execute_plan(
+            refusing, "bucket", plan, prefix=PREFIX, key_timezone=TZ
+        )
+
+    assert refusing.deletes == []
+    assert not [c for c in refusing._calls if c[0] == "delete_object"]
+    assert refusing.objects == dict(s3.objects) and dict(s3.objects)
+
+
+def test_a_silently_short_listing_cannot_reach_the_unseen_tail():
+    """The nastiest listing fault: HTTP 200, fewer keys, no error.
+
+    A listing truncated mid-pagination makes the census under-count the
+    archive and under-protect, so the property to pin is the bound that
+    survives anyway: the plan can only name folders the census saw (the
+    oldest prefix of the sorted listing), so the unseen newest tail - the
+    watermark's own source - is outside every plan by construction.
+    """
+    s3 = build({"a": 60, "b": 60})
+    full = dict(s3.objects)
+    newest_per_camera = {
+        camera: max(k for k in full if k.split("/")[1] == camera)
+        for camera in ("a", "b")
+    }
+    half = sorted(full)[: len(full) // 2]
+
+    class ShortLister(FakeS3):
+        """Serve only the oldest half of any full-prefix listing, no error."""
+
+        def get_paginator(self, operation_name):
+            inner = super().get_paginator(operation_name)
+
+            class Truncated:
+                def paginate(self_, Bucket, Prefix=""):
+                    pages = list(inner.paginate(Bucket=Bucket, Prefix=Prefix))
+                    events = [
+                        e for p in pages for e in p.get("Contents", [])
+                    ]
+                    if len(Prefix.rstrip("/").split("/")) <= 2:
+                        events = events[: len(events) // 2]
+                    if events:
+                        yield {"Contents": events, "KeyCount": len(events)}
+
+            return Truncated()
+
+    short = ShortLister(objects=dict(s3.objects))
+    result = take(short, floor_hours=24)
+    plan = rt.build_plan(result, keep_bytes=None, max_delete_percent=100)
+
+    rd.execute_plan(short, "bucket", plan, prefix=PREFIX, key_timezone=TZ)
+
+    deleted = set(full) - set(short.objects)
+    assert deleted <= set(half)
+    for camera, newest in newest_per_camera.items():
+        assert newest in short.objects
 
 
 def test_executor_falls_back_when_batch_delete_is_unsupported():
