@@ -1266,6 +1266,36 @@ def test_upload_bodies_are_rewindable(frigate_server):
     assert isinstance(bodies[0], (bytes, bytearray, io.IOBase))
 
 
+def test_part_size_below_the_floor_fails_before_any_request(frigate_server):
+    """The upload refuses a too-small part size at entry, before Frigate is
+    asked for a clip.
+
+    S3 itself only rejects the result at complete_multipart_upload, so without
+    this check a bad S3_PART_SIZE would cost a full clip download per attempt.
+    config.load_config rejects the same value at startup; this is the second
+    guard, the one that holds for callers that pass part_size directly.
+    """
+    client = make_client(frigate_server)
+    s3 = FakeS3Client()
+
+    with pytest.raises(ValueError, match="at least"):
+        run(
+            m.upload_clip_hybrid(
+                camera="cam_a",
+                start_ts=float(BASE_TS),
+                end_ts=float(BASE_TS + SEGMENT_SECONDS),
+                frigate_client=client,
+                s3_bucket="bucket",
+                s3_client=s3,
+                part_size=m.MIN_MULTIPART_PART_SIZE - 1,
+            )
+        )
+
+    assert FakeFrigateHandler.clip_attempts == []
+    assert s3.puts == []
+    assert s3.parts == []
+
+
 def test_multipart_cancellation_stops_at_the_part_boundary(frigate_server):
     """A cancel raised mid-multipart must stop the loop and abort the upload.
 

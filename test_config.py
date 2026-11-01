@@ -184,12 +184,60 @@ def test_clip_retries_may_be_zero_but_not_negative():
     assert message.startswith("CLIP_RETRIES:")
 
 
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("5242880", 5 * 1024**2),
+        ("5MiB", 5 * 1024**2),
+        ("5 MiB", 5 * 1024**2),
+        ("8mib", 8 * 1024**2),
+        ("8MiB", 8 * 1024**2),
+        ("1GiB", 1024**3),
+        ("16 MiB", 16 * 1024**2),
+        ("10MB", 10 * 1000**2),
+        ("10 megabytes", 10 * 1000**2),
+    ],
+)
+def test_part_size_accepts_human_sizes(value, expected):
+    """The part size is a size the operator picks against a bucket policy or a
+    memory budget, and 5242880 is not how either is written; MiB is the unit
+    multipart parts are actually counted in, so it is the documented spelling.
+    A decimal MB stays decimal (10MB is 10,000,000, not 10,485,760).
+
+    The floor itself is refused at config time. upload_clip_hybrid has the same
+    check at entry - before any request leaves the process, pinned in
+    test_frigate_s3_archiver.py - so this is what turns an .env typo into a
+    startup message instead of a failure partway through archiving.
+    """
+    assert load(S3_PART_SIZE=value).s3_part_size == expected
+
+
+def test_part_size_default_is_the_binary_minimum():
+    cfg = load()
+
+    assert cfg.s3_part_size == m.DEFAULT_PART_SIZE == m.MIN_MULTIPART_PART_SIZE
+
+
 def test_part_size_below_the_s3_minimum_is_rejected():
-    """A smaller part fails complete_multipart_upload after full download."""
+    """A smaller part fails complete_multipart_upload after full download. The
+    refusal states the floor in bytes and in the MiB spelling the value was
+    meant to be written in - 5242880 and 5 MiB are the same number, and an
+    operator who wrote 4MiB has to see which limit was missed.
+    """
     message = error_variable(S3_PART_SIZE=m.MIN_MULTIPART_PART_SIZE - 1)
 
     assert message.startswith("S3_PART_SIZE:")
     assert str(m.MIN_MULTIPART_PART_SIZE) in message
+    assert "5 MiB" in message
+
+
+def test_part_size_just_under_the_minimum_in_human_form():
+    """5MB is 485,760 bytes short of the 5 MiB floor - the trap a human-size
+    parser introduces, so it must be refused rather than accepted."""
+    message = error_variable(S3_PART_SIZE="5MB")
+
+    assert message.startswith("S3_PART_SIZE:")
+    assert "5 MiB" in message
 
 
 def test_restart_backoff_may_not_exceed_its_cap():
@@ -429,6 +477,42 @@ class TestRetention:
 
         assert cfg.retention_keep_days == 1
 
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ("400000000000", 400_000_000_000),
+            ("400B", 400),
+            ("400 KB", 400_000),
+            ("400KiB", 400 * 1024),
+            ("400MB", 400 * 1000**2),
+            ("400 MB", 400 * 1000**2),
+            ("400mb", 400 * 1000**2),
+            ("400GB", 400 * 1000**3),
+            ("400 GB", 400 * 1000**3),
+            ("400gigabytes", 400 * 1000**3),
+            ("400 G", 400 * 1000**3),
+            ("400 gigabyte", 400 * 1000**3),
+            ("400GiB", 400 * 1024**3),
+            ("400Gib", 400 * 1024**3),
+            ("400 gib", 400 * 1024**3),
+            ("400 GiB", 400 * 1024**3),
+            ("400 TB", 400 * 1000**4),
+            ("400TiB", 400 * 1024**4),
+            ("1.5GB", 1_500_000_000),
+            (" 400 GB ", 400 * 1000**3),
+        ],
+    )
+    def test_keep_bytes_accepts_human_sizes(self, value, expected):
+        """A size target must be writable as 400GB, not 400000000000. Plain
+        integers keep their exact old meaning (bytes), and unit spellings are
+        delegated to humanfriendly: decimal multiples for GB/MB/KB (how S3
+        counts) and IEC multiples for GiB/MiB/KiB, so 400GB and 400GiB are
+        deliberately different values.
+        """
+        cfg = load(RETENTION_KEEP_DAYS=30, RETENTION_KEEP_BYTES=value)
+
+        assert cfg.retention_keep_bytes == expected
+
     def test_headroom_override_is_optional(self):
         assert load().retention_growth_headroom_bytes is None
         assert (
@@ -454,7 +538,15 @@ class TestRetention:
         "name, value",
         [
             ("RETENTION_KEEP_DAYS", "seven"),
-            ("RETENTION_KEEP_BYTES", "10GB"),
+            ("RETENTION_KEEP_BYTES", "400 GB extra"),
+            ("RETENTION_KEEP_BYTES", "1e9"),
+            ("RETENTION_KEEP_BYTES", "1_000"),
+            ("RETENTION_KEEP_BYTES", "0x10"),
+            ("RETENTION_KEEP_BYTES", "4 00 GB"),
+            ("RETENTION_KEEP_BYTES", ".5GB"),
+            ("RETENTION_KEEP_BYTES", "-5GB"),
+            ("RETENTION_KEEP_BYTES", "400 GB GB"),
+            ("RETENTION_KEEP_BYTES", "\uff14\uff10\uff10 GB"),
             ("RETENTION_MAX_DELETE_PERCENT", "150"),
             ("RETENTION_MAX_DELETE_PERCENT", "0"),
             ("RETENTION_MAX_UNKNOWN_FRACTION", "1.5"),

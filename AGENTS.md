@@ -88,6 +88,19 @@ names by path throughout, so treat them all as load-bearing.
   makes two real hours share one key; the warning never changes the run. `load_config()` returns it; every value is parsed and range-checked
   there, so an invalid setting exits at startup with the variable name in the
   message instead of failing mid-clip. `ConfigError` is a `SystemExit`.
+  Every size knob (`S3_PART_SIZE`, `RETENTION_KEEP_BYTES`,
+  `RETENTION_GROWTH_HEADROOM_BYTES`) takes human sizes through
+  `humanfriendly.parse_size` (`400GB`, `8MiB`, plain bytes), because S3 sizes
+  are unreadable as raw digits and parts are counted in MiB; `_bytes` (optional,
+  None when unset) and `_sized` (with a default) share one `_parsed_bytes`. The
+  library's unit grammar is adopted as-is, but a shape gate in front of it
+  rejects what `parse_size` is lenient about (trailing junk, prefix-letter
+  units, non-ASCII digits) - a misread size target deletes footage. The
+  below-floor part-size refusal is not the only guard: `upload_clip_hybrid`
+  raises its own `ValueError` at entry, before Frigate is contacted, so the
+  complete_multipart_upload it protects never begins. A
+  below-minimum refusal quotes the floor in bytes and in `format_size(binary)`
+  (`5242880 (5 MiB)`), the parser's own inverse.
   It imports the `DEFAULT_*` constants from `frigate_s3_archiver` (one direction
   only - the archiver imports `config` inside `main()` to avoid a cycle).
   Two settings deliberately bypass it: `METRICS_PORT`/`METRICS_BIND` are read by
@@ -676,7 +689,10 @@ truncated at cuts from 1 byte inside the trailer to deep inside a fragment.
 
 `test_config.py`: the config layer against an explicit environ mapping -
 defaults equal to the module constants, blank values treated as unset, every
-rejected value naming its variable, `S3_PART_SIZE` refused below the multipart
+rejected value naming its variable, every size knob written as a human size
+(`400GB` decimal, `400GiB` binary, plain integers unchanged) and the shapes
+`parse_size` would guess at refused, including the decimal-`5MB` trap against
+the binary 5 MiB part-size floor, `S3_PART_SIZE` refused below the multipart
 minimum, and the two camera filters refused together. Also pins the key layout:
 with no prefix set a key is byte-identical to one written before prefixes
 existed (so an existing bucket keeps resuming), and build/parse round-trip only
@@ -885,7 +901,11 @@ gap once and exits, leaving the watermark alone either way.
 ## Dependencies
 
 - Python 3.14; see `requirements.txt` (`requests`, `boto3`,
-  `prometheus-client`). `.github/workflows/test.yml` runs the suite on 3.14 for
+  `prometheus-client`, `humanfriendly`). `humanfriendly` is imported by
+  `config.py` alone, for `parse_size`; the rest of the package must not reach
+  for it. Its runtime dependencies are Python-2/Windows-only, so on 3.14 it
+  installs as pure Python, and it is the one dependency that changes no upload
+  path - a startup-time parser only. `.github/workflows/test.yml` runs the suite on 3.14 for
   pushes to `main`/`master` and for every pull request. `requirements.txt` is a
   `pip-compile` lock pinned by Python 3.14, which matches
   the `python:3.14-slim` image; regenerate it from `requirements.in` with that same
@@ -956,8 +976,8 @@ This tree is meant to be public. Before publishing (or re-publishing) a snapshot
    contributor keeps their own v3 grant. If contributing back matters, say so in
    `CONTRIBUTING.md` rather than expecting the license to enforce it.
    Licensing of the shipped dependencies was checked against their distributions:
-   `requests` Apache-2.0, `boto3` Apache-2.0, `prometheus-client`
-   Apache-2.0 AND BSD-2-Clause, and transitively MIT (`urllib3`, `six`, `jmespath`),
+   `requests` Apache-2.0, `boto3` Apache-2.0, `humanfriendly`
+   MIT, `prometheus-client` Apache-2.0 AND BSD-2-Clause, and transitively MIT (`urllib3`, `six`, `jmespath`),
    BSD (`idna`), Apache-2.0 (`botocore`, `s3transfer`), dual Apache/BSD
    (`python-dateutil`) and MPL-2.0 (`certifi`) - all GPL-3 compatible, so the image
    stays distributable. Never paraphrase the license text; reference `LICENSE`.

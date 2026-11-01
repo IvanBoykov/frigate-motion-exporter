@@ -11,11 +11,20 @@ Defaults are not duplicated here: they come from the ``DEFAULT_*`` constants in
 when a variable is unset. The import is one-way - the archiver reaches this
 module from ``main()`` only, otherwise the two would form a cycle.
 """
+import numbers
 import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from humanfriendly import (
+    InvalidSize,
+    disk_size_units,
+    format_size,
+    parse_size,
+)
+from humanfriendly.text import tokenize
 
 import logging_setup
 import retention
@@ -77,6 +86,78 @@ def _flag(environ, name, default):
     )
 
 
+_BYTE_UNITS = tuple(
+    sorted(
+        {"B"}
+        | {
+            symbol
+            for unit in disk_size_units
+            for symbol in (unit.decimal.symbol, unit.binary.symbol)
+        }
+    )
+)
+
+
+def _byte_count(text):
+    """``text`` as a byte count, or None when it is not one.
+
+    Units are delegated to :func:`humanfriendly.parse_size`, so the accepted
+    spellings are that library's: a bare integer is bytes, and a number may
+    carry a unit symbol or name in either multiples of 1000 (``400GB``) or the
+    binary IEC ones (``400 GiB``); ambiguous spellings are decimal, matching
+    how S3 counts bytes.
+
+    The gate in front of it is the reason not to call ``parse_size`` directly.
+    It is lenient in three ways a startup validator cannot be: it ignores
+    anything after the second token (``"400 GB extra"`` is 400 GB), it resolves
+    any unit starting with a known prefix letter (``"1kk"`` is one kilobyte),
+    and its tokenizer folds fullwidth digits into a number. Each turns a typo
+    into a threshold the operator did not write, and a too-small
+    ``RETENTION_KEEP_BYTES`` deletes footage. So the shape is checked here - two
+    tokens at most, a number then at most one letters-only unit, ASCII only -
+    while which unit strings mean what stays entirely the library's business.
+    A unit is matched leniently inside its own token (``"400GBs"`` is 400 GB),
+    which the library's own grammar decides; what the gate rules out is the
+    size coming from anything other than one number plus one unit.
+    """
+    if not text.isascii():
+        return None
+    tokens = tokenize(text)
+    if not tokens or not isinstance(tokens[0], numbers.Number):
+        return None
+    if len(tokens) == 2:
+        unit = tokens[1]
+        if not (isinstance(unit, str) and unit.isascii() and unit.isalpha()):
+            return None
+    elif len(tokens) != 1:
+        return None
+    try:
+        return parse_size(text)
+    except InvalidSize:
+        return None
+
+
+def _parsed_bytes(name, raw, minimum):
+    """``raw`` as a byte count, refusing anything the operator did not write."""
+    value = _byte_count(raw)
+    if value is None:
+        raise ConfigError(
+            name,
+            f"expected a byte count (e.g. 400GB, 10MiB, or a plain number"
+            f" of bytes; accepted units: {'/'.join(_BYTE_UNITS)}), got {raw!r}",
+        )
+    if minimum is not None and value < minimum:
+        # The human form of the minimum is the inverse of what this parser
+        # accepts (5242880 <-> 5 MiB), so the message states the limit in the
+        # spelling the value was supposed to be written in.
+        raise ConfigError(
+            name,
+            f"expected >= {minimum}"
+            f" ({format_size(minimum, binary=True)}), got {value}",
+        )
+    return value
+
+
 def _bytes(environ, name, minimum=None):
     """An optional byte count: unset/blank is None, a set value is an int >=
     ``minimum`` (a set 0 is a value - "reserve nothing" - not a missing knob).
@@ -88,13 +169,17 @@ def _bytes(environ, name, minimum=None):
     raw = _present(environ, name)
     if raw is None:
         return None
-    try:
-        value = int(raw)
-    except ValueError:
-        raise ConfigError(name, f"expected an integer byte count, got {raw!r}")
-    if minimum is not None and value < minimum:
-        raise ConfigError(name, f"expected >= {minimum}, got {value}")
-    return value
+    return _parsed_bytes(name, raw, minimum)
+
+
+def _sized(environ, name, default, minimum=None):
+    """A byte count that has a default: unset/blank is ``default``, a set value
+    is an int >= ``minimum``, written the same human way ``_bytes`` reads.
+    """
+    raw = _present(environ, name)
+    if raw is None:
+        return default
+    return _parsed_bytes(name, raw, minimum)
 
 
 def _retention(environ):
@@ -394,11 +479,10 @@ def _load(environ, backfill_raw=None):
             "only one of them is needed",
         )
 
-    part_size = _number(
+    part_size = _sized(
         environ,
         "S3_PART_SIZE",
         defaults.DEFAULT_PART_SIZE,
-        int,
         minimum=defaults.MIN_MULTIPART_PART_SIZE,
     )
     backoff = _seconds(
