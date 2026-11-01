@@ -698,7 +698,15 @@ the global sweep's fairness, percent-cap and headroom behavior, every stop
 reason, the foreign-byte guard refusing a whole-prefix delete, and the
 executor's per-key shape check - foreign keys inside a planned folder survive,
 a plan aimed at a foreign prefix deletes nothing, and a clip arriving in a
-planned folder after the census is deleted with the folder it belongs to.
+planned folder after the census is deleted with the folder it belongs to. The
+listing-failure paths are pinned at both levels: a census whose listing dies
+mid-pagination yields no partial census, a folder whose re-check listing fails
+(502/timeout/403) is never deleted on the strength of the minutes-old plan, a
+hard error on the batch delete aborts the pass without the per-key fallback or
+the later folders, and a silently short 200-response listing - fewer keys, no
+error - cannot reach the unseen newest tail, because a plan can only name
+folders the census saw and each camera's newest clip (the watermark's source)
+always sits beyond what a truncated sorted listing served.
 Camera names are unique per test because the prometheus registry is
 process-global.
 
