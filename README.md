@@ -459,7 +459,7 @@ environment: it is the `backfill --after TS --before TS` subcommand, see
 | `CLIP_RETRIES` | Re-fetch attempts for a failed clip window, shared by all three chains: a stream cut inside its final box, a "no recordings" 400, and an empty 200. `0` acts on the first answer: a truncated export is reported as an error instead of being re-requested (and produces no `-truncated.mp4` key), an unavailable window is closed by its marker without retrying | `6` |
 | `CLIP_RETRY_MAX_DELAY_SECONDS` | Ceiling for the pause between those attempts: it starts at 10 s and doubles until it saturates here. The defaults span ~310 s across all retries - a budget sized to ride out a Frigate restart without sealing windows | `80` |
 | `CAMERA_RESTART_BACKOFF_SECONDS` | First delay before a crashed camera task is restarted; doubles per consecutive crash | `5` |
-| `CAMERA_RESTART_BACKOFF_MAX_SECONDS` | Ceiling on that delay - effectively how long the archiver waits out a Frigate outage. With a 35-day retention it can safely be set to hours | `300` |
+| `CAMERA_RESTART_BACKOFF_MAX_SECONDS` | Ceiling on that delay - effectively how long the archiver waits out a Frigate outage. On a deployment whose Frigate keeps motion for 35 days it can safely be set to hours | `300` |
 
 `WATERMARK_LOOKBACK_SECONDS` and `FIRST_RUN_LOOKBACK_SECONDS` are two different
 windows, not two settings for one thing. The first is a search bound: if it finds
@@ -727,7 +727,7 @@ Bucket state at exit -> behavior on the next start:
 | Empty (first run, or only unparseable keys) | Scan the last `first_run_lookback_seconds` (3 days) | nothing newer than the window; older footage is out of scope by design |
 | Newest clip within `watermark_lookback_seconds` (24 h) | Resume from its start; the overlapping clip is skipped by `head_object` | none |
 | Newest clip older than 24 h (long downtime) | Treated as no clips: resume from the 3-day first-run window, which is wider than the lookback, so the gap between the newest clip and now is re-scanned | none, provided downtime < 3 days |
-| Downtime longer than the 3-day first-run window | Everything between the last clip and `now - first_run_lookback_seconds` is never scanned, even though Frigate may still hold it (this instance keeps motion segments 35 days) | nothing, once a backfill run covers the gap - the loop will not fetch it by itself, so fill it with the `backfill --after/--before` subcommand before Frigate's retention expires it; raising `first_run_lookback_seconds` also works but pays a deep scan on every restart |
+| Downtime longer than the 3-day first-run window | Everything between the last clip and `now - first_run_lookback_seconds` is never scanned, even though Frigate may still hold it (on a deployment with `record.motion.days=35`, that is 35 days) | nothing, once a backfill run covers the gap - the loop will not fetch it by itself, so fill it with the `backfill --after/--before` subcommand before Frigate's retention expires it; raising `first_run_lookback_seconds` also works but pays a deep scan on every restart |
 | Killed during a scan | Nothing was written; the pass is redone | none |
 | Killed between clips | Resume from the newest clip's start | none |
 | Killed during a small clip (single PUT) | S3 PUT is atomic: the object is complete or absent; re-uploaded | none |

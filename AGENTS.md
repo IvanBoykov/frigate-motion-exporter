@@ -16,7 +16,9 @@ committed here is public.
   than `401`, so a `302` from a 200-expecting call means missing credentials.
 - Cameras are whatever your `/api/config` returns; the archiver discovers them and
   never hardcodes a name. Deployment details (version, retention settings, camera
-  list) belong in your own notes, not in this file.
+  list) belong in your own notes, not in this file: nothing here may identify a
+  particular deployment, so a real value belongs here only as a worked example
+  ("a deployment configured with X"), never as "this instance's settings".
 
 ## Git remote
 
@@ -867,9 +869,10 @@ What the API does NOT guarantee, but the archiver's logic assumes:
   request, the clip call answers 400 -> per-camera restart -> the rescan no
   longer sees the interval. Self-healing and the footage was already gone.
 
-Retention math for the recovery matrix, in terms of the Frigate settings it reads:
-with `record.continuous.days=0`, `record.motion.days=35`, mode `motion` - non-motion
-segments die within the hour, motion-bearing segments live 35 days, and the
+Retention math for the recovery matrix, in terms of the Frigate settings it reads.
+Worked example - a deployment configured with `record.continuous.days=0`,
+`record.motion.days=35`, mode `motion`: non-motion segments die within the hour,
+motion-bearing segments live 35 days, and the
 window is computed from *now*, so Frigate-side loss equals downtime beyond
 35 days. The archiver's own first-resume fallback (3 days) is the binding
 constraint long before Frigate's retention: downtime > `first_run_lookback`
