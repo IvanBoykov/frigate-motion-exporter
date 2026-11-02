@@ -175,6 +175,9 @@ names by path throughout, so treat them all as load-bearing.
 - `.github/dependabot.yml` opens weekly update PRs for the pip, Docker and
   GitHub Actions dependencies.
 - `env.example` - the template for the `.env` both compose files require.
+- `CHANGELOG.md` - release history, newest first. The `Unreleased` section is
+  emptied into the version heading when a `v*` tag is cut, since the tag is
+  what builds the published image.
 - `prometheus/` - alerting rules for the owner's own Kubernetes/VictoriaMetrics
   deployment, kept here as a worked example of what the metric surface supports,
   not as a supported part of the project: they encode one operator's scrape
