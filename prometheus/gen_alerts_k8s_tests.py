@@ -149,6 +149,7 @@ RULE_LABELS = {
         "instance": inst, "reason": "headroom"},
     "RetentionDeletesRefusedWhileGrowing": lambda cam, inst: {
         "instance": inst, "kind": "s3_accessdenied"},
+    "RetentionOverSizeTarget": lambda cam, inst: {"instance": inst},
     "RetentionDeletionEnabled": lambda cam, inst: {"instance": inst},
 }
 
@@ -161,13 +162,15 @@ ALL = ["FrigateMotionExporterDown", "FrigateMotionExporterUnscrapeable",
        "RetentionCannotReachSizeTarget", "RetentionPassStuck",
        "RetentionSeesForeignArchive", "RetentionNotPruning",
        "RetentionRefusingToDeleteForHeadroom",
-       "RetentionDeletesRefusedWhileGrowing", "RetentionDeletionEnabled"]
+       "RetentionDeletesRefusedWhileGrowing", "RetentionOverSizeTarget",
+       "RetentionDeletionEnabled"]
 
 RETENTION_ALERTS = [
     "RetentionFloorExceedsSizeTarget", "RetentionCannotReachSizeTarget",
     "RetentionPassStuck", "RetentionSeesForeignArchive",
     "RetentionNotPruning", "RetentionRefusingToDeleteForHeadroom",
-    "RetentionDeletesRefusedWhileGrowing", "RetentionDeletionEnabled",
+    "RetentionDeletesRefusedWhileGrowing", "RetentionOverSizeTarget",
+    "RetentionDeletionEnabled",
 ]
 
 FLOOR = 53 * 2**30
@@ -187,8 +190,8 @@ def step_counter(n, per_pass, period=45):
 
 
 def retention(n, dry=1, over_floor=0, over_cap=0, over_hr=0, in_progress=0,
-              heartbeat="track", unknown=0, total=180 * 2**30, inst=INST_A,
-              del_fail=0, grow=0):
+              heartbeat="track", unknown=0, total=140 * 2**30,
+              target=150 * 2**30, inst=INST_A, del_fail=0, grow=0):
     """Series a run_prune_pass produces.
 
     Values mirror what set_census_metrics writes: every retention gauge carries
@@ -202,12 +205,15 @@ def retention(n, dry=1, over_floor=0, over_cap=0, over_hr=0, in_progress=0,
     # shape count_delete_failures writes, one jump per pass, not a trickle;
     # grow makes the census gauge climb by the bytes one pass lets the
     # archive gain.
+    # The default total sits UNDER the default target, so a scenario that does
+    # not name its size is a healthy archive and R9 (RetentionOverSizeTarget)
+    # stays silent in it by construction; an over-full bucket says so itself.
     fails = step_counter(n, del_fail) if del_fail else None
     archive = f"{total}+{grow}x{n}" if grow else f"{total}x{n}"
     series = [
         s("retention_dry_run", f"{dry}x{n}", camera=None, instance=inst),
         s("retention_archive_bytes", archive, camera=None, instance=inst),
-        s("retention_target_bytes", f"{150 * 2**30}x{n}", camera=None,
+        s("retention_target_bytes", f"{target}x{n}", camera=None,
           instance=inst),
         s("retention_headroom_bytes", "209715200x" + str(n), camera=None,
           instance=inst),
@@ -765,13 +771,68 @@ def build():
     lines = healthy(240, cams=(CAM,)) + retention(
         240, dry=0, heartbeat="track", del_fail=0, grow=40 * 2**30 // 240)
     fired = {("121m", "RetentionDeletesRefusedWhileGrowing"): [],
-             ("239m", "RetentionDeletesRefusedWhileGrowing"): []}
+             ("239m", "RetentionDeletesRefusedWhileGrowing"): [],
+             ("121m", "RetentionOverSizeTarget"): [],
+             ("195m", "RetentionOverSizeTarget"): [],
+             ("196m", "RetentionOverSizeTarget"): [({}, None)],
+             ("239m", "RetentionOverSizeTarget"): [({}, None)]}
     sc.append(("R-S13 growth with zero refusals: ordinary fill toward the"
-               " target. Only the refusals arm the rule, never size alone -"
-               " otherwise every healthy catch-up would page.",
+               " target. Only the refusals arm R7, never size alone - otherwise"
+               " every healthy catch-up would page. The same series shows what R9"
+               " keys on: the fill crosses the 150 GiB target at 61m (140 GiB +"
+               " 40 GiB over 240 m), so R9 is pending through 121m and fires at"
+               " 196m - 61m + its 135m `for` - counting from the crossing rather"
+               " than from process start. A pure fill with no stop behind it is"
+               " exactly the state R9 is meant to report: over target and staying"
+               " there.",
                lines,
-               checks(["121m", "239m"],
-                      ["RetentionDeletesRefusedWhileGrowing"], fired)))
+               checks(["121m", "195m", "196m", "239m"],
+                      ["RetentionDeletesRefusedWhileGrowing",
+                       "RetentionOverSizeTarget"], fired)))
+
+    # R9: the size target as a steady state, not a per-pass measurement.
+    lines = healthy(200, cams=(CAM,)) + retention(
+        200, dry=0, heartbeat="track", total=160 * 2**30, target=150 * 2**30)
+    fired = {("134m", "RetentionOverSizeTarget"): [],
+             ("135m", "RetentionOverSizeTarget"): [({}, None)],
+             ("135m", "RetentionFloorExceedsSizeTarget"): [],
+             ("135m", "RetentionCannotReachSizeTarget"): [],
+             ("135m", "RetentionRefusingToDeleteForHeadroom"): []}
+    sc.append(("R-S16 the archive sits over its byte target at every census - the"
+               " drain below target never completes. The reading must hold three"
+               " full 45m intervals, so 134m (two intervals of it) is silent and"
+               " 135m fires. The other size rules stay silent because no stop"
+               " fired: the pruner still plans deletions every pass, the archive"
+               " simply stays big. A days-only deployment publishes target 0 and"
+               " never arms this rule at all.",
+               lines,
+               checks(["134m", "135m"], ["RetentionOverSizeTarget"], fired)))
+
+    # The overshoot the growth reservation underestimated. One census measures
+    # it, the pass frees the bytes, and the next census reads under target, so
+    # the condition never completes its `for`. Modeled as the next census coming
+    # back low rather than a mid-run drop because that is the shape the code
+    # writes: run_prune_pass sets retention_archive_bytes once, at the pass
+    # start, and never rewrites it after deleting.
+    lines = healthy(200, cams=(CAM,)) + retention(
+        200, dry=0, heartbeat="track", total=160 * 2**30, target=150 * 2**30)
+    lines = replace_series(
+        lines, "retention_archive_bytes",
+        s("retention_archive_bytes",
+          f"{160 * 2**30}-{10 * 2**30 // 45}x44 {140 * 2**30}x152",
+          camera=None))
+    fired = {("44m", "RetentionOverSizeTarget"): [],
+             ("134m", "RetentionOverSizeTarget"): [],
+             ("135m", "RetentionOverSizeTarget"): []}
+    sc.append(("R-S17 the growth reservation underestimates: one census measures"
+               " 160 GiB against a 150 GiB target, the pass frees 10 GiB, and the"
+               " next census already reads 140 GiB. R9 never fires because the"
+               " `for` is broken 44 minutes in, before three intervals complete -"
+               " precisely the self-healing overshoot the delay exists to ride"
+               " out.",
+               lines,
+               checks(["44m", "134m", "135m"], ["RetentionOverSizeTarget"],
+                      fired)))
 
     return sc
 

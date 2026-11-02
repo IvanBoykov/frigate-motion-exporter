@@ -115,6 +115,9 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
       - eval_time: 119m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 119m
         alertname: RetentionDeletionEnabled
         exp_alerts: []
       - eval_time: 182m
@@ -184,6 +187,9 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
       - eval_time: 182m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 182m
         alertname: RetentionDeletionEnabled
         exp_alerts: []
       - eval_time: 186m
@@ -253,6 +259,9 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
       - eval_time: 186m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 186m
         alertname: RetentionDeletionEnabled
         exp_alerts: []
       - eval_time: 190m
@@ -322,6 +331,9 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
       - eval_time: 190m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 190m
         alertname: RetentionDeletionEnabled
         exp_alerts: []
       - eval_time: 240m
@@ -391,6 +403,9 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
       - eval_time: 240m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 240m
         alertname: RetentionDeletionEnabled
         exp_alerts: []
       - eval_time: 719m
@@ -458,6 +473,9 @@ tests:
         exp_alerts: []
       - eval_time: 719m
         alertname: RetentionDeletesRefusedWhileGrowing
+        exp_alerts: []
+      - eval_time: 719m
+        alertname: RetentionOverSizeTarget
         exp_alerts: []
       - eval_time: 719m
         alertname: RetentionDeletionEnabled
@@ -1363,6 +1381,9 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
       - eval_time: 5m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 5m
         alertname: RetentionDeletionEnabled
         exp_alerts: []
       - eval_time: 30m
@@ -1387,6 +1408,9 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
       - eval_time: 30m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 30m
         alertname: RetentionDeletionEnabled
         exp_alerts: []
       - eval_time: 59m
@@ -1409,6 +1433,9 @@ tests:
         exp_alerts: []
       - eval_time: 59m
         alertname: RetentionDeletesRefusedWhileGrowing
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: RetentionOverSizeTarget
         exp_alerts: []
       - eval_time: 59m
         alertname: RetentionDeletionEnabled
@@ -1442,7 +1469,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "1x600"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320x600"
+        values: "150323855360x600"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x600"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -1466,7 +1493,7 @@ tests:
       - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
         values: "0+60x600"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x600"
+        values: "75161927680x600"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x600"
     alert_rule_test:
@@ -1492,6 +1519,9 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
       - eval_time: 30m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 30m
         alertname: RetentionDeletionEnabled
         exp_alerts: []
       - eval_time: 400m
@@ -1516,6 +1546,9 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
       - eval_time: 400m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 400m
         alertname: RetentionDeletionEnabled
         exp_alerts: []
       - eval_time: 599m
@@ -1538,6 +1571,9 @@ tests:
         exp_alerts: []
       - eval_time: 599m
         alertname: RetentionDeletesRefusedWhileGrowing
+        exp_alerts: []
+      - eval_time: 599m
+        alertname: RetentionOverSizeTarget
         exp_alerts: []
       - eval_time: 599m
         alertname: RetentionDeletionEnabled
@@ -1571,7 +1607,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "0x620"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320x620"
+        values: "150323855360x620"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x620"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -1595,7 +1631,7 @@ tests:
       - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
         values: "0+60x620"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x620"
+        values: "75161927680x620"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x620"
     alert_rule_test:
@@ -1621,6 +1657,9 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
       - eval_time: 359m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 359m
         alertname: RetentionDeletionEnabled
         exp_alerts: []
       - eval_time: 360m
@@ -1645,6 +1684,9 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
       - eval_time: 360m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 360m
         alertname: RetentionDeletionEnabled
         exp_alerts: []
       - eval_time: 500m
@@ -1667,6 +1709,9 @@ tests:
         exp_alerts: []
       - eval_time: 500m
         alertname: RetentionDeletesRefusedWhileGrowing
+        exp_alerts: []
+      - eval_time: 500m
+        alertname: RetentionOverSizeTarget
         exp_alerts: []
       - eval_time: 500m
         alertname: RetentionDeletionEnabled
@@ -1706,7 +1751,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "0x60"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320x60"
+        values: "150323855360x60"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x60"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -1730,7 +1775,7 @@ tests:
       - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
         values: "0+60x60"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x60"
+        values: "75161927680x60"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x60"
     alert_rule_test:
@@ -1754,6 +1799,9 @@ tests:
         exp_alerts: []
       - eval_time: 14m
         alertname: RetentionDeletesRefusedWhileGrowing
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: RetentionOverSizeTarget
         exp_alerts: []
       - eval_time: 14m
         alertname: RetentionDeletionEnabled
@@ -1787,6 +1835,9 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
       - eval_time: 15m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 15m
         alertname: RetentionDeletionEnabled
         exp_alerts: []
 
@@ -1818,7 +1869,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "0x240"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320x240"
+        values: "150323855360x240"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x240"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -1842,7 +1893,7 @@ tests:
       - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
         values: "0+60x240"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x240"
+        values: "75161927680x240"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x240"
     alert_rule_test:
@@ -1866,6 +1917,9 @@ tests:
         exp_alerts: []
       - eval_time: 179m
         alertname: RetentionDeletesRefusedWhileGrowing
+        exp_alerts: []
+      - eval_time: 179m
+        alertname: RetentionOverSizeTarget
         exp_alerts: []
       - eval_time: 179m
         alertname: RetentionDeletionEnabled
@@ -1899,6 +1953,9 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
       - eval_time: 180m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 180m
         alertname: RetentionDeletionEnabled
         exp_alerts: []
 
@@ -1930,7 +1987,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "0x120"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320x120"
+        values: "150323855360x120"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x120"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -1954,7 +2011,7 @@ tests:
       - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
         values: "0+60x120"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x120"
+        values: "75161927680x120"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x120"
     alert_rule_test:
@@ -1999,7 +2056,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "0x120"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320x120"
+        values: "150323855360x120"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x120"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -2019,7 +2076,7 @@ tests:
       - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="headroom"}
         values: "0x120"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x120"
+        values: "75161927680x120"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x120"
       - series: prune_in_progress{instance="10.128.0.18:9108"}
@@ -2063,7 +2120,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "0x90"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320x90"
+        values: "150323855360x90"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x90"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -2087,7 +2144,7 @@ tests:
       - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
         values: "0+60x90"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x90"
+        values: "75161927680x90"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x90"
     alert_rule_test:
@@ -2132,7 +2189,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "0x90"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320x90"
+        values: "150323855360x90"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x90"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -2156,7 +2213,7 @@ tests:
       - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
         values: "0+60x90"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x90"
+        values: "75161927680x90"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x90"
     alert_rule_test:
@@ -2195,7 +2252,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "0x220"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320x220"
+        values: "150323855360x220"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x220"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -2219,7 +2276,7 @@ tests:
       - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
         values: "5x220"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x220"
+        values: "75161927680x220"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x220"
     alert_rule_test:
@@ -2264,7 +2321,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "0x420"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320x420"
+        values: "150323855360x420"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x420"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -2288,7 +2345,7 @@ tests:
       - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
         values: "0+60x420"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x420"
+        values: "75161927680x420"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x420"
     alert_rule_test:
@@ -2312,6 +2369,9 @@ tests:
         exp_alerts: []
       - eval_time: 359m
         alertname: RetentionDeletesRefusedWhileGrowing
+        exp_alerts: []
+      - eval_time: 359m
+        alertname: RetentionOverSizeTarget
         exp_alerts: []
       - eval_time: 359m
         alertname: RetentionDeletionEnabled
@@ -2343,6 +2403,9 @@ tests:
               description: "The size target cannot fit the archive plus the estimated growth, so deletion is disabled until the configuration changes. If the estimate is right, the target is simply too small. If the newest hours are a recording spike rather than a rate, the estimate will never drop by itself: check the biggest recent hour folder, and consider RETENTION_GROWTH_HEADROOM_BYTES=0 (soft quota) or a pinned byte value."
       - eval_time: 360m
         alertname: RetentionDeletesRefusedWhileGrowing
+        exp_alerts: []
+      - eval_time: 360m
+        alertname: RetentionOverSizeTarget
         exp_alerts: []
       - eval_time: 360m
         alertname: RetentionDeletionEnabled
@@ -2376,7 +2439,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "0x420"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320x420"
+        values: "150323855360x420"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x420"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -2400,7 +2463,7 @@ tests:
       - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
         values: "0+60x420"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x420"
+        values: "75161927680x420"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x420"
     alert_rule_test:
@@ -2431,6 +2494,9 @@ tests:
               description: "The size target cannot fit the archive plus the estimated growth, so deletion is disabled until the configuration changes. If the estimate is right, the target is simply too small. If the newest hours are a recording spike rather than a rate, the estimate will never drop by itself: check the biggest recent hour folder, and consider RETENTION_GROWTH_HEADROOM_BYTES=0 (soft quota) or a pinned byte value."
       - eval_time: 360m
         alertname: RetentionDeletesRefusedWhileGrowing
+        exp_alerts: []
+      - eval_time: 360m
+        alertname: RetentionOverSizeTarget
         exp_alerts: []
       - eval_time: 360m
         alertname: RetentionDeletionEnabled
@@ -2464,7 +2530,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "0x240"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320+178956970x240"
+        values: "150323855360+178956970x240"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x240"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -2488,7 +2554,7 @@ tests:
       - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
         values: "0+60x240"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x240"
+        values: "75161927680x240"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x240"
       - series: retention_delete_failures_total{instance="10.128.0.18:9108",kind="s3_accessdenied"}
@@ -2536,7 +2602,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "0x240"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320x240"
+        values: "150323855360x240"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x240"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -2560,7 +2626,7 @@ tests:
       - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
         values: "0+60x240"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x240"
+        values: "75161927680x240"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x240"
       - series: retention_delete_failures_total{instance="10.128.0.18:9108",kind="s3_accessdenied"}
@@ -2573,7 +2639,7 @@ tests:
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
 
-  # R-S13 growth with zero refusals: ordinary fill toward the target. Only the refusals arm the rule, never size alone - otherwise every healthy catch-up would page.
+  # R-S13 growth with zero refusals: ordinary fill toward the target. Only the refusals arm R7, never size alone - otherwise every healthy catch-up would page. The same series shows what R9 keys on: the fill crosses the 150 GiB target at 61m (140 GiB + 40 GiB over 240 m), so R9 is pending through 121m and fires at 196m - 61m + its 135m `for` - counting from the crossing rather than from process start. A pure fill with no stop behind it is exactly the state R9 is meant to report: over target and staying there.
   - interval: 1m
     input_series:
       - series: up{instance="10.128.0.18:9108"}
@@ -2601,7 +2667,7 @@ tests:
       - series: retention_dry_run{instance="10.128.0.18:9108"}
         values: "0x240"
       - series: retention_archive_bytes{instance="10.128.0.18:9108"}
-        values: "193273528320+178956970x240"
+        values: "150323855360+178956970x240"
       - series: retention_target_bytes{instance="10.128.0.18:9108"}
         values: "161061273600x240"
       - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
@@ -2625,13 +2691,176 @@ tests:
       - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
         values: "0+60x240"
       - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
-        values: "96636764160x240"
+        values: "75161927680x240"
       - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
         values: "-86400x240"
     alert_rule_test:
       - eval_time: 121m
         alertname: RetentionDeletesRefusedWhileGrowing
         exp_alerts: []
+      - eval_time: 121m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 195m
+        alertname: RetentionDeletesRefusedWhileGrowing
+        exp_alerts: []
+      - eval_time: 195m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 196m
+        alertname: RetentionDeletesRefusedWhileGrowing
+        exp_alerts: []
+      - eval_time: 196m
+        alertname: RetentionOverSizeTarget
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              severity: "warning"
+            exp_annotations:
+              summary: "The archive has been over RETENTION_KEEP_BYTES for three consecutive intervals"
+              description: "The census has measured the archive above its size target across three intervals in a row. One pass over target is the growth reservation having underestimated the archive, and the next pass frees it; three intervals means deletion cannot reach the target. Read retention_over_budget_bytes{reason} for the stop that is holding it: floor means the protected days cost more than the target allows, percent_cap means the per-pass brake is the limiter, headroom means the reservation guard has stopped deleting. If every reason is 0, no pass has completed since the overshoot began - check prune_last_success_timestamp_seconds."
       - eval_time: 239m
         alertname: RetentionDeletesRefusedWhileGrowing
+        exp_alerts: []
+      - eval_time: 239m
+        alertname: RetentionOverSizeTarget
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              severity: "warning"
+            exp_annotations:
+              summary: "The archive has been over RETENTION_KEEP_BYTES for three consecutive intervals"
+              description: "The census has measured the archive above its size target across three intervals in a row. One pass over target is the growth reservation having underestimated the archive, and the next pass frees it; three intervals means deletion cannot reach the target. Read retention_over_budget_bytes{reason} for the stop that is holding it: floor means the protected days cost more than the target allows, percent_cap means the per-pass brake is the limiter, headroom means the reservation guard has stopped deleting. If every reason is 0, no pass has completed since the overshoot began - check prune_last_success_timestamp_seconds."
+
+  # R-S16 the archive sits over its byte target at every census - the drain below target never completes. The reading must hold three full 45m intervals, so 134m (two intervals of it) is silent and 135m fires. The other size rules stay silent because no stop fired: the pruner still plans deletions every pass, the archive simply stays big. A days-only deployment publishes target 0 and never arms this rule at all.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x200"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x200"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x200"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x200"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x199"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x200"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x200"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x200"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x200"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x200"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x200"
+      - series: retention_dry_run{instance="10.128.0.18:9108"}
+        values: "0x200"
+      - series: retention_archive_bytes{instance="10.128.0.18:9108"}
+        values: "171798691840x200"
+      - series: retention_target_bytes{instance="10.128.0.18:9108"}
+        values: "161061273600x200"
+      - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
+        values: "209715200x200"
+      - series: retention_unknown_bytes{instance="10.128.0.18:9108"}
+        values: "0x200"
+      - series: retention_unknown_keys{instance="10.128.0.18:9108"}
+        values: "0x200"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="floor"}
+        values: "0x200"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="percent_cap"}
+        values: "0x200"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="target_met"}
+        values: "0x200"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="foreign_keys"}
+        values: "0x200"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="headroom"}
+        values: "0x200"
+      - series: prune_in_progress{instance="10.128.0.18:9108"}
+        values: "0x200"
+      - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
+        values: "0+60x200"
+      - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "85899345920x200"
+      - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-86400x200"
+    alert_rule_test:
+      - eval_time: 134m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 135m
+        alertname: RetentionOverSizeTarget
+        exp_alerts:
+          - exp_labels:
+              instance: "10.128.0.18:9108"
+              severity: "warning"
+            exp_annotations:
+              summary: "The archive has been over RETENTION_KEEP_BYTES for three consecutive intervals"
+              description: "The census has measured the archive above its size target across three intervals in a row. One pass over target is the growth reservation having underestimated the archive, and the next pass frees it; three intervals means deletion cannot reach the target. Read retention_over_budget_bytes{reason} for the stop that is holding it: floor means the protected days cost more than the target allows, percent_cap means the per-pass brake is the limiter, headroom means the reservation guard has stopped deleting. If every reason is 0, no pass has completed since the overshoot began - check prune_last_success_timestamp_seconds."
+
+  # R-S17 the growth reservation underestimates: one census measures 160 GiB against a 150 GiB target, the pass frees 10 GiB, and the next census already reads 140 GiB. R9 never fires because the `for` is broken 44 minutes in, before three intervals complete - precisely the self-healing overshoot the delay exists to ride out.
+  - interval: 1m
+    input_series:
+      - series: up{instance="10.128.0.18:9108"}
+        values: "1x200"
+      - series: camera_task_running{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "1x200"
+      - series: camera_motion_intervals_found{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x200"
+      - series: camera_consecutive_failures{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0x200"
+      - series: camera_watermark_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-120+60x199"
+      - series: clips_uploaded_total{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "0+1x200"
+      - series: process_start_time_seconds{instance="10.128.0.18:9108"}
+        values: "-43200x200"
+      - series: process_open_fds{instance="10.128.0.18:9108"}
+        values: "12x200"
+      - series: process_resident_memory_bytes{instance="10.128.0.18:9108"}
+        values: "96075776x200"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="json"}
+        values: "0+1x200"
+      - series: frigate_response_seconds_count{instance="10.128.0.18:9108",kind="clip_ttfb"}
+        values: "0+1x200"
+      - series: retention_dry_run{instance="10.128.0.18:9108"}
+        values: "0x200"
+      - series: retention_headroom_bytes{instance="10.128.0.18:9108"}
+        values: "209715200x200"
+      - series: retention_unknown_bytes{instance="10.128.0.18:9108"}
+        values: "0x200"
+      - series: retention_unknown_keys{instance="10.128.0.18:9108"}
+        values: "0x200"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="floor"}
+        values: "0x200"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="percent_cap"}
+        values: "0x200"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="target_met"}
+        values: "0x200"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="foreign_keys"}
+        values: "0x200"
+      - series: retention_over_budget_bytes{instance="10.128.0.18:9108",reason="headroom"}
+        values: "0x200"
+      - series: prune_in_progress{instance="10.128.0.18:9108"}
+        values: "0x200"
+      - series: prune_last_success_timestamp_seconds{instance="10.128.0.18:9108"}
+        values: "0+60x200"
+      - series: archive_bytes{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "85899345920x200"
+      - series: archive_horizon_timestamp_seconds{camera="dacha_cam",instance="10.128.0.18:9108"}
+        values: "-86400x200"
+      - series: retention_archive_bytes{instance="10.128.0.18:9108"}
+        values: "171798691840-238609294x44 150323855360x152"
+    alert_rule_test:
+      - eval_time: 44m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 134m
+        alertname: RetentionOverSizeTarget
+        exp_alerts: []
+      - eval_time: 135m
+        alertname: RetentionOverSizeTarget
         exp_alerts: []

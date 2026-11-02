@@ -254,6 +254,21 @@ spec:
               too small. If the newest hours are a recording spike rather than a rate, the estimate will
               never drop by itself: check the biggest recent hour folder, and consider RETENTION_GROWTH_HEADROOM_BYTES=0
               (soft quota) or a pinned byte value.'
+        - alert: RetentionOverSizeTarget
+          expr: |
+            retention_archive_bytes > retention_target_bytes > 0
+          for: 2h15m
+          labels:
+            severity: warning
+          annotations:
+            summary: The archive has been over RETENTION_KEEP_BYTES for three consecutive intervals
+            description: 'The census has measured the archive above its size target across three intervals
+              in a row. One pass over target is the growth reservation having underestimated the archive,
+              and the next pass frees it; three intervals means deletion cannot reach the target. Read
+              retention_over_budget_bytes{reason} for the stop that is holding it: floor means the protected
+              days cost more than the target allows, percent_cap means the per-pass brake is the limiter,
+              headroom means the reservation guard has stopped deleting. If every reason is 0, no pass
+              has completed since the overshoot began - check prune_last_success_timestamp_seconds.'
         - alert: CameraInDeepBackoff
           expr: camera_consecutive_failures >= 5
           for: 5m

@@ -444,6 +444,40 @@ groups:
             consider RETENTION_GROWTH_HEADROOM_BYTES=0 (soft quota) or a
             pinned byte value.
 
+      # R9. The archive measures over its byte target and stays there for
+      # three intervals. The census runs at the start of a pass and the gauge is
+      # not rewritten afterwards, so one reading is the size at one instant and
+      # the next pass is the first chance to free it: an overshoot the growth
+      # reservation underestimated is gone after that pass and must not page.
+      # 2h15m = 3 x the default 45m interval, so the reading must survive three
+      # full intervals - three censuses after the one that first saw the
+      # overshoot - before it reads as a state rather than a bad estimate.
+      # Retune this with RETENTION_PRUNE_INTERVAL_SECONDS: too short and the rule
+      # reads one census per pass as three. Days-only deployments publish target
+      # 0, which the expression excludes, so size never fires where no size
+      # target exists.
+      - alert: RetentionOverSizeTarget
+        expr: |
+          retention_archive_bytes > retention_target_bytes > 0
+        for: 2h15m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            The archive has been over RETENTION_KEEP_BYTES for three
+            consecutive intervals
+          description: >-
+            The census has measured the archive above its size target across
+            three intervals in a row. One pass over target is the growth
+            reservation having underestimated the archive, and the next pass
+            frees it; three intervals means deletion cannot reach the target.
+            Read retention_over_budget_bytes{reason} for the stop that is
+            holding it: floor means the protected days cost more than the target
+            allows, percent_cap means the per-pass brake is the limiter,
+            headroom means the reservation guard has stopped deleting. If every
+            reason is 0, no pass has completed since the overshoot began - check
+            prune_last_success_timestamp_seconds.
+
       - alert: CameraInDeepBackoff
         expr: camera_consecutive_failures >= 5
         for: 5m

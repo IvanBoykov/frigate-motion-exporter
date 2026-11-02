@@ -14,6 +14,11 @@ their record is git log and the release pages.
 ### Added
 
 - `CHANGELOG.md`.
+- `RetentionOverSizeTarget` in the example alert rules: fires when the census
+  measures the archive over `RETENTION_KEEP_BYTES` across three consecutive
+  prune intervals. One pass over target is the growth reservation having
+  underestimated the archive and the next pass frees it, so the rule waits
+  rather than paging on a self-healing overshoot.
 
 ## [0.4.1] - 2026-11-02
 

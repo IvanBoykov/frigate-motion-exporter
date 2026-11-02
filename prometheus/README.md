@@ -64,6 +64,7 @@ Detection latencies at 1 m / 1 m, for reference:
 | RetentionDeletesRefusedWhileGrowing | two 90 m windows + 3 h delta, no `for` | ~3 h after deletion starts being refused, once two consecutive pass windows refused and the census grew; needs a growing archive - refusals on an under-target bucket are deliberately silent |
 | RetentionDeletionEnabled | 6 h | ~6 h after deletion is enabled - info-level, a record rather than a page |
 
+| RetentionOverSizeTarget | 2 h 15 m | ~2 h 15 m after a census first measures the archive over `RETENTION_KEEP_BYTES`: 3 default prune intervals, so retune it with the interval |
 Two boundary rules, both measured rather than reasoned about: a `for` counts
 from the first sample, so a rule true from the very first evaluation fires
 *exactly* at its `for` (15 m, 30 m and 3 h below are the first firing minutes,
@@ -109,6 +110,13 @@ on a pruner that is running exactly as configured. The same coupling runs the
 other way for `RetentionCannotReachSizeTarget` (3 h): with a long interval, a
 few *healthy* bounded passes on an over-full bucket can look like a sustained
 miss.
+
+`RetentionOverSizeTarget` (2 h 15 m) is three default intervals of one reading,
+and it is the rule to retune together with the interval: with a longer interval
+the hours cover fewer passes, so 2 h 15 m stops meaning "three censuses said
+over target" and starts paging on the single overshoot the growth reservation
+underestimated - count passes, not hours. A shorter interval only makes it
+stricter, since the same hours then span more censuses.
 
 The two failure-streak rules are coupled to the same constant in the first
 direction. `RetentionDeletesRefusedWhileGrowing` looks at 90-minute windows:
