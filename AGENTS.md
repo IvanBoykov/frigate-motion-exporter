@@ -548,7 +548,13 @@ process-global `prometheus_client` registry, and `async_main` binds `METRICS_POR
 - `clips_deleted_total{camera}`, `deleted_bytes_total{camera}` - counted where
   the delete succeeded, so a dry run never increments them (that is what makes
   "deletion happened" distinguishable from "deletion was planned").
-- `retention_dry_run`, `retention_archive_bytes`, `retention_target_bytes`,
+- `retention_target_bytes` - `RETENTION_KEEP_BYTES` as configured, published by
+  `metrics.publish_retention_target` at startup from both entry points
+  (archiver and backfill) and never rewritten by a pass: an early-returning
+  plan (the foreign-keys brake, the headroom refusal) has no target of its own
+  and must not publish 0 over the configured one. 0 means no size target -
+  days-only retention or retention disabled.
+- `retention_dry_run`, `retention_archive_bytes`,
   `retention_headroom_bytes`, `retention_unknown_bytes`,
   `retention_unknown_keys` - the pass's own view. `retention_dry_run` sits at its
   0 default while retention is disabled, so "0" alone does not mean deletion is

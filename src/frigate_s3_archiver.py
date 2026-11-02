@@ -1850,6 +1850,10 @@ async def async_main(config, now_fn=time.time):
         bind=metrics_bind,
     )
     log.info("Metrics: http://%s:%d/metrics", metrics_bind, bound_port)
+    # Published unconditionally, before any work: the size target is config, so
+    # it is reported even when no prune task will run (days-only, or retention
+    # disabled, where 0 is the honest "no size target").
+    metrics.publish_retention_target(cfg.retention_keep_bytes)
 
     try:
         return await _run_cameras(cfg, s3_bucket, key_timezone, now_fn)
@@ -2085,6 +2089,7 @@ async def async_backfill_main(config, now_fn=time.time):
         bind=metrics_bind,
     )
     log.info("Metrics: http://%s:%d/metrics", metrics_bind, bound_port)
+    metrics.publish_retention_target(config.retention_keep_bytes)
     try:
         frigate_client = make_frigate_client(
             config.frigate_url,

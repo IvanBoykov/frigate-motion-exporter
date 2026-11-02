@@ -127,8 +127,10 @@ RETENTION_ARCHIVE_BYTES = Gauge(
 )
 RETENTION_TARGET_BYTES = Gauge(
     "retention_target_bytes",
-    "The size retention is steering to: RETENTION_KEEP_BYTES, or 0 when the"
-    " archive is bounded by RETENTION_KEEP_DAYS alone",
+    "RETENTION_KEEP_BYTES as configured, published at startup by every"
+    " retention code path. 0 means no size target: either the archive is"
+    " bounded by RETENTION_KEEP_DAYS alone, or retention is disabled and no"
+    " threshold was configured",
 )
 RETENTION_UNKNOWN_BYTES = Gauge(
     "retention_unknown_bytes",
@@ -361,6 +363,17 @@ class NoRecordingsError(RuntimeError):
     no retry will bring them back. The window is closed by a marker object
     instead of pinning the watermark forever.
     """
+
+
+def publish_retention_target(keep_bytes):
+    """Publish the configured size target at startup.
+
+    ``RETENTION_KEEP_BYTES`` is configuration, not the outcome of a pass, so it
+    is set here rather than by ``set_census_metrics``: a pass that ends early -
+    the foreign-keys brake, a listing failure, or no prune task at all because
+    the archive is bounded by days - must not report the target as absent.
+    """
+    RETENTION_TARGET_BYTES.set(0 if keep_bytes is None else int(keep_bytes))
 
 
 def start_metrics_server(port=DEFAULT_METRICS_PORT, bind=DEFAULT_METRICS_BIND):

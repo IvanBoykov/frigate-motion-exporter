@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 import backfill
 import frigate_s3_archiver as m
 from config import load_config
+import metrics
 from test_frigate_s3_archiver import (
     BASE_TS,
     END_TS,
@@ -610,3 +611,56 @@ class TestBackfillEntryPoint:
 
         assert status == 0
         assert calls == [["cam_a"]]
+
+
+class TestBackfillPublishesRetentionTarget:
+    """The size target is config, so the backfill entry point publishes it too.
+
+    A backfill run exposes /metrics for its whole duration, and an operator
+    watching it decide how deep to fill needs the same retention_target_bytes
+    series the archiver serves - not a 0 that really means "this entry point
+    does not run a prune task".
+    """
+
+    SENTINEL = 777_000_000
+
+    def _run(self, monkeypatch, frigate, extra_env):
+        calls = []
+
+        async def fake_run_backfill(config, cameras, after, before, **kw):
+            calls.append(cameras)
+            return {"cam_a": {"uploaded": 1}}
+
+        monkeypatch.setattr(backfill, "run_backfill", fake_run_backfill)
+        monkeypatch.setattr(m, "make_s3_client", lambda: FakeS3Client())
+        cfg = load_config(
+            {
+                "FRIGATE_URL": frigate,
+                "S3_BUCKET": "bucket",
+                "FRIGATE_USER": "",
+                "FRIGATE_PASSWORD": "",
+                "METRICS_PORT": "0",
+                **extra_env,
+            },
+            backfill_raw=(str(BASE_TS), str(END_TS)),
+        )
+        return asyncio.run(m.async_backfill_main(config=cfg)), calls
+
+    def test_a_configured_size_target_is_served(
+        self, monkeypatch, frigate_server
+    ):
+        self._run(
+            monkeypatch,
+            frigate_server,
+            {"RETENTION_KEEP_DAYS": "7", "RETENTION_KEEP_BYTES": "1000"},
+        )
+        assert sample("retention_target_bytes", {}) == 1000.0
+
+    def test_a_stale_value_does_not_survive_a_days_only_run(
+        self, monkeypatch, frigate_server
+    ):
+        """The unlabelled gauge is process-global, so a run without a size
+        target must publish 0 rather than leave a previous value readable."""
+        metrics.publish_retention_target(self.SENTINEL)
+        self._run(monkeypatch, frigate_server, {"RETENTION_KEEP_DAYS": "7"})
+        assert sample("retention_target_bytes", {}) == 0.0

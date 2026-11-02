@@ -242,7 +242,7 @@ startup rather than silently disabling observability.
 | `clips_deleted_total` | Counter | `camera` | Keys actually deleted (never incremented by a dry run) |
 | `deleted_bytes_total` | Counter | `camera` | Bytes actually deleted |
 | `retention_dry_run` | Gauge | - | 1 while retention only plans. 0 means deletion is enabled, but only once a pass has run: with retention disabled it sits at its 0 default, so read it with `prune_last_success_timestamp_seconds > 0` |
-| `retention_archive_bytes` / `retention_target_bytes` / `retention_headroom_bytes` | Gauge | - | Archive size, the configured size target, and the growth headroom held back. `retention_target_bytes` is 0 when only `KEEP_DAYS` is set |
+| `retention_archive_bytes` / `retention_target_bytes` / `retention_headroom_bytes` | Gauge | - | Archive size, the configured size target, and the growth headroom held back. `retention_target_bytes` is set at startup from `RETENTION_KEEP_BYTES` regardless of any pass, and is 0 when only `KEEP_DAYS` is set or retention is disabled |
 | `retention_unknown_bytes` / `retention_unknown_keys` | Gauge | - | Bytes/keys under the prefix this archiver did not write. Nonzero usually means `S3_PREFIX` changed; a changed `S3_KEY_TIMEZONE` does not show up here, because renamed folders still parse as ours |
 | `retention_over_budget_bytes` | Gauge | `reason` | How far the archive is over target, on the one series naming why the pass stopped: `target_met`, `floor`, `percent_cap`, `foreign_keys`, `headroom`. Only the matching reason is nonzero |
 | `prune_last_success_timestamp_seconds` | Gauge | - | Unix time the last prune pass finished clean. 0 until the first pass and while retention is disabled |

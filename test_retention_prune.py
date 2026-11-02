@@ -580,3 +580,61 @@ class TestRuntimeWiring:
         cameras, _ = self.drive(monkeypatch, frigate_server, {})
         for kwargs in cameras.values():
             assert kwargs["max_upload_age_seconds"] is None
+
+SENTINEL = 777_000_000
+
+
+def target_value():
+    return REGISTRY.get_sample_value("retention_target_bytes")
+
+
+class TestTargetIsConfig:
+    """retention_target_bytes mirrors RETENTION_KEEP_BYTES, a config value.
+
+    It used to be set from the plan, so any pass that returned early - the
+    foreign-keys brake, the headroom refusal - published 0 for an archive whose
+    size target the operator did configure, and a dashboard could not tell
+    "no size target" from "the pass stopped". Startup publishes it now, from
+    every entry point, whether or not a prune task will ever run.
+    """
+
+    def test_startup_publishes_the_configured_target(self, monkeypatch, frigate_server):
+        metrics.publish_retention_target(SENTINEL)
+        TestRuntimeWiring.drive(
+            self,
+            monkeypatch,
+            frigate_server,
+            {"RETENTION_KEEP_DAYS": "7", "RETENTION_KEEP_BYTES": "1000"},
+        )
+        assert target_value() == 1000.0
+
+    def test_days_only_startup_publishes_zero(self, monkeypatch, frigate_server):
+        """0 is the honest "no size target", not "never set"."""
+        metrics.publish_retention_target(SENTINEL)
+        TestRuntimeWiring.drive(
+            self, monkeypatch, frigate_server, {"RETENTION_KEEP_DAYS": "7"}
+        )
+        assert target_value() == 0.0
+
+    def test_startup_publishes_zero_with_retention_disabled(
+        self, monkeypatch, frigate_server
+    ):
+        """No prune task starts in this mode, yet the series must still exist:
+        a missing gauge cannot be told apart from a stale exporter."""
+        metrics.publish_retention_target(SENTINEL)
+        TestRuntimeWiring.drive(self, monkeypatch, frigate_server, {})
+        assert target_value() == 0.0
+
+    def test_a_pass_never_revokes_the_configured_target(self):
+        """The regression: the foreign-keys brake returns a plan with no target
+        of its own, which must not rewrite the configured one to 0."""
+        s3 = fake_s3(hours=2, per_hour=2)
+        s3.put(f"{PREFIX}stray.bin", 50_000)
+        keep_bytes = 10_000
+        metrics.publish_retention_target(keep_bytes)
+
+        plan = asyncio.run(run_pass(s3, keep_days=1, keep_bytes=keep_bytes))
+
+        assert plan.reason == retention.REASON_FOREIGN_KEYS
+        assert plan.target_bytes is None
+        assert target_value() == float(keep_bytes)

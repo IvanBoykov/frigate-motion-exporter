@@ -115,9 +115,10 @@ def set_census_metrics(census, plan, dry_run):
     """
     metrics.RETENTION_DRY_RUN.set(1 if dry_run else 0)
     metrics.RETENTION_ARCHIVE_BYTES.set(census.total_bytes)
-    metrics.RETENTION_TARGET_BYTES.set(
-        0 if plan.target_bytes is None else plan.target_bytes
-    )
+    # retention_target_bytes is deliberately not touched here: the configured
+    # target is published at startup (metrics.publish_retention_target), because
+    # an early-returning plan - the foreign-keys brake, the headroom refusal -
+    # has no target of its own but does not revoke the configured one either.
     metrics.RETENTION_HEADROOM_BYTES.set(plan.headroom_bytes)
     metrics.RETENTION_UNKNOWN_BYTES.set(census.unknown_bytes)
     metrics.RETENTION_UNKNOWN_KEYS.set(census.unknown_keys)
